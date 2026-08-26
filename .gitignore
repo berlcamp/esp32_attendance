@@ -1,0 +1,11 @@
+# Secrets — NEVER commit
+include/secrets.h
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editors / OS
+.vscode/
+.DS_Store
