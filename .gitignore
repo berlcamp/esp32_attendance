@@ -10,3 +10,7 @@ include/secrets.h
 .vscode/
 .DS_Store
 test-tmp/
+
+# Browser-automation artifacts from local verification
+.playwright-mcp/
+setup-state.png
