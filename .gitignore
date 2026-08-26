@@ -9,3 +9,4 @@ include/secrets.h
 # Editors / OS
 .vscode/
 .DS_Store
+test-tmp/
