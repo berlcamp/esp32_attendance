@@ -76,14 +76,9 @@ revoke all on mvts_esp32.attendance    from anon;
 revoke all on mvts_esp32.students      from anon;
 revoke all on mvts_esp32.student_cards from anon;
 
-grant insert on mvts_esp32.attendance to anon;
-
-drop policy if exists "device inserts attendance" on mvts_esp32.attendance;
-create policy "device inserts attendance"
-  on mvts_esp32.attendance
-  for insert
-  to anon
-  with check (true);
+-- NOTE: the device does NOT get table privileges. It calls the SECURITY
+-- DEFINER function in sql/rpc.sql instead, so the public anon key can append
+-- attendance and do nothing else. Run sql/rpc.sql after this file.
 
 -- Your Next.js app should read with the service_role key from a server
 -- component / route handler, or with an authenticated staff role. Grant here:

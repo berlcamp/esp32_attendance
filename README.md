@@ -14,7 +14,7 @@ USB-Serial/JTAG on `/dev/cu.usbmodem101`.
 1. **Expose the schema.** Supabase Dashboard → **Settings → API → Exposed
    schemas** → add `mvts_esp32`. Until you do, every POST returns
    `406 PGRST106` and the device just keeps queueing.
-2. **Run the SQL.** SQL Editor → paste `sql/schema.sql`, run it. Then
+2. **Run the SQL**, in order: `sql/schema.sql`, then `sql/rpc.sql`, then
    `sql/seed.sql` for the nine simulated students.
 3. Copy `include/secrets.h.example` → `include/secrets.h` and fill it in.
    `secrets.h` is gitignored.
@@ -69,8 +69,15 @@ uploader only ever drains; the HTTP call happens outside the queue mutex.
 **Nothing is deleted until Supabase says yes.** The queue advances a persisted
 cursor only after a 2xx. A crash between "Postgres inserted" and "cursor saved"
 re-sends the batch, which is harmless: `event_id` is a client-generated UUID
-and the primary key, and inserts use `Prefer: resolution=ignore-duplicates`
-(`ON CONFLICT DO NOTHING`). Retries can never create a duplicate attendance row.
+and the primary key, and `mvts_esp32.record_attendance()` inserts with
+`ON CONFLICT (event_id) DO NOTHING`. Retries can never create a duplicate row.
+
+**The device has no table privileges.** It posts batches to the SECURITY
+DEFINER function `record_attendance()` and holds `EXECUTE` on that alone — no
+`INSERT`, no `SELECT`, on any table. Going through PostgREST's upsert directly
+would have required `GRANT SELECT ON attendance TO anon` (Postgres needs SELECT
+to infer an `ON CONFLICT` target), which would put every student's movement
+history one accidental policy away from the public anon key.
 
 **Timestamps are honest about themselves.** The S3 has no battery-backed RTC,
 so after a power cut it boots believing it is 1970. Scans taken before NTP

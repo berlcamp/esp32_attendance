@@ -10,6 +10,9 @@
 // Supabase dashboard, or every POST returns 404 PGRST106.
 #define SUPABASE_SCHEMA "mvts_esp32"
 #define SUPABASE_TABLE "attendance"
+// The device calls this function instead of writing the table directly, so
+// the anon key carries no table privileges at all. See sql/rpc.sql.
+#define SUPABASE_RPC "record_attendance"
 
 // ---- Simulation ----------------------------------------------------------
 // Deterministic on purpose: a gap in Supabase is then a bug, not randomness.
