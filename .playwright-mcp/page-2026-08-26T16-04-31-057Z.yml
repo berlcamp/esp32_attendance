@@ -1,0 +1,14 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: gate-01 · school gate
+        - heading "Smart.Campus" [level=1] [ref=e7]
+        - paragraph [ref=e8]: Live attendance as cards pass the gate.
+      - generic [ref=e9]:
+        - generic [ref=e10]: awaiting first scan
+        - generic [ref=e13]:
+          - generic [ref=e14]: 00:04:30
+          - generic [ref=e15]: THU 27 AUG · Asia/Manila
+    - generic [ref=e17]: Connecting to board…
+  - alert [ref=e18]

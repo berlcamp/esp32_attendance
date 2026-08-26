@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink:        #090807;
+  --color-surface:    #100e0c;
+  --color-surface-2:  #17140f;
+  --color-rule:       #2a241c;
+  --color-rule-soft:  #1c1813;
+  --color-amber:      #ffb23f;
+  --color-amber-deep: #c9822a;
+  --color-signal:     #63d297;
+  --color-alarm:      #ff6b5e;
+  --color-paper:      #f0e9dc;
+  --color-muted:      #8a8073;
+
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-martian), ui-monospace, "SFMono-Regular", monospace;
+}
+
+html, body { height: 100%; }
+
+body {
+  background-color: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Sodium lamp pooling at the top of the board, plus film grain so the black
+   reads as a surface rather than an absence. */
+.atmosphere::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(120% 60% at 12% -10%, rgba(255, 178, 63, 0.13), transparent 60%),
+    radial-gradient(90% 50% at 90% 0%, rgba(201, 130, 42, 0.07), transparent 65%);
+}
+
+.atmosphere::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.22;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+/* Hairline that carries a slow travelling highlight — the board is live. */
+.livewire {
+  position: relative;
+  height: 1px;
+  background: var(--color-rule);
+  overflow: hidden;
+}
+.livewire::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--color-amber), transparent);
+  transform: translateX(-100%);
+  animation: sweep 6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes sweep { to { transform: translateX(100%); } }
+
+@keyframes flapIn {
+  from { opacity: 0; transform: translateY(-6px) scaleY(0.82); filter: blur(1px); }
+  to   { opacity: 1; transform: translateY(0) scaleY(1); filter: blur(0); }
+}
+.flap { animation: flapIn 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(99, 210, 151, 0.5); }
+  50%      { opacity: 0.55; box-shadow: 0 0 0 5px rgba(99, 210, 151, 0); }
+}
+.pulse { animation: pulse 2.4s ease-in-out infinite; }
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Hatched flag for rows whose data is qualified rather than clean. */
+.hatch {
+  background-image: repeating-linear-gradient(
+    -45deg, rgba(255, 178, 63, 0.16) 0 3px, transparent 3px 7px
+  );
+}
+
+::selection { background: var(--color-amber); color: var(--color-ink); }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: var(--color-ink); }
+::-webkit-scrollbar-thumb { background: var(--color-rule); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-amber-deep); }
+
+@media (prefers-reduced-motion: reduce) {
+  .flap, .pulse, .livewire::after { animation: none; }
+}

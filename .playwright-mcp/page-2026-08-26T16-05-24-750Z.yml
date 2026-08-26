@@ -1,0 +1,27 @@
+- generic [active] [ref=f2e1]:
+  - main [ref=f2e3]:
+    - generic [ref=f2e4]:
+      - generic [ref=f2e5]:
+        - generic [ref=f2e6]: gate-01 · school gate
+        - heading "Smart.Campus" [level=1] [ref=f2e7]
+        - paragraph [ref=f2e8]: Live attendance as cards pass the gate.
+      - generic [ref=f2e9]:
+        - generic [ref=f2e10]: awaiting first scan
+        - generic [ref=f2e13]:
+          - generic [ref=f2e14]: 00:05:24
+          - generic [ref=f2e15]: THU 27 AUG · Asia/Manila
+    - generic [ref=f2e17]:
+      - generic [ref=f2e18]: Board not connected
+      - paragraph [ref=f2e19]: Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
+      - generic [ref=f2e20]:
+        - paragraph [ref=f2e21]:
+          - text: Create
+          - code [ref=f2e22]: web/.env.local
+          - text: ":"
+        - generic [ref=f2e23]: SUPABASE_URL=https://<project-ref>.supabase.co SUPABASE_SERVICE_ROLE_KEY=<service_role key> SCHOOL_TZ=Asia/Manila
+        - paragraph [ref=f2e24]:
+          - text: The service_role key is server-side only — it never reaches the browser. Restart
+          - code [ref=f2e25]: npm run dev
+          - text: after adding it.
+  - button "Open Next.js Dev Tools" [ref=f2e31] [cursor=pointer]
+  - alert [ref=f2e35]
