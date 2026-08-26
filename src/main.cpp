@@ -221,12 +221,23 @@ static void uploaderTask(void*) {
                     code, (unsigned)backoff.failures(),
                     (unsigned)backoff.delayMs(),
                     resp.empty() ? "" : resp.substr(0, 200).c_str());
-      if (resp.find("PGRST106") != std::string::npos || code == 404 ||
-          code == 406) {
+      if (resp.find("PGRST106") != std::string::npos) {
         Serial.println(
             "[upload] hint: schema '" SUPABASE_SCHEMA "' is not exposed. "
-            "Supabase Dashboard -> Settings -> API -> Exposed schemas -> add it, "
-            "then run sql/schema.sql. Queued events will flush automatically.");
+            "Dashboard -> Settings -> API -> Exposed schemas -> add it.");
+      } else if (resp.find("PGRST202") != std::string::npos) {
+        Serial.println(
+            "[upload] hint: function " SUPABASE_SCHEMA "." SUPABASE_RPC
+            "() not found. Run sql/rpc.sql in the SQL editor.");
+      } else if (resp.find("42501") != std::string::npos) {
+        Serial.println(
+            "[upload] hint: anon lacks EXECUTE on " SUPABASE_RPC
+            "(). Re-run the grants at the bottom of sql/rpc.sql.");
+      }
+      if (code >= 400 && code < 500) {
+        Serial.println(
+            "[upload] (4xx is a config problem, not an outage — events stay "
+            "queued and will flush once it is fixed.)");
       }
       vTaskDelay(pdMS_TO_TICKS(backoff.delayMs()));
     }
