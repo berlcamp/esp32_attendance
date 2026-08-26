@@ -50,6 +50,7 @@ static volatile uint32_t g_sent = 0;
 static volatile uint32_t g_failed = 0;
 static volatile uint32_t g_dropped = 0;   // queue-full rejections
 static volatile uint32_t g_corrupt = 0;   // unparseable queue lines
+static volatile uint32_t g_duplicates = 0;  // re-sends the server ignored
 static volatile bool g_online = false;
 
 #define LOCK_QUEUE() xSemaphoreTake(g_queueMutex, portMAX_DELAY)
@@ -212,8 +213,21 @@ static void uploaderTask(void*) {
       UNLOCK_QUEUE();
       g_sent += payload.size();
       backoff.onSuccess();
-      Serial.printf("[upload] %u accepted (http %d), %u still queued\n",
-                    (unsigned)payload.size(), code, (unsigned)depth);
+      // record_attendance() returns how many rows were NEW. A shortfall means
+      // duplicates were ignored, i.e. a previous batch had in fact landed and
+      // we only re-sent it because the response never came back.
+      const long inserted = resp.empty() ? -1 : atol(resp.c_str());
+      if (inserted >= 0 && (size_t)inserted < payload.size()) {
+        const unsigned dup = (unsigned)(payload.size() - inserted);
+        g_duplicates += dup;
+        Serial.printf(
+            "[upload] %u sent, %ld inserted, %u duplicate(s) ignored, "
+            "%u still queued\n",
+            (unsigned)payload.size(), inserted, dup, (unsigned)depth);
+      } else {
+        Serial.printf("[upload] %u accepted (http %d), %u still queued\n",
+                      (unsigned)payload.size(), code, (unsigned)depth);
+      }
     } else {
       g_failed++;
       backoff.onFailure();
@@ -253,12 +267,12 @@ static void printStatus() {
   UNLOCK_QUEUE();
   Serial.printf(
       "[status] wifi=%s ip=%s rssi=%d net=%s clock=%s queue=%u sent=%u "
-      "failed=%u dropped=%u corrupt=%u heap=%uKB up=%llds\n",
+      "failed=%u dropped=%u dup=%u corrupt=%u heap=%uKB up=%llds\n",
       WiFi.status() == WL_CONNECTED ? "up" : "down",
       WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
       g_netEnabled ? "on" : "off", g_time.synced() ? "synced" : "UNSYNCED",
       (unsigned)depth, (unsigned)g_sent, (unsigned)g_failed,
-      (unsigned)g_dropped, (unsigned)g_corrupt,
+      (unsigned)g_dropped, (unsigned)g_duplicates, (unsigned)g_corrupt,
       (unsigned)(ESP.getFreeHeap() / 1024),
       (long long)TimeSync::uptimeSeconds());
 }
