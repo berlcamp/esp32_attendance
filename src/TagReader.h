@@ -22,11 +22,14 @@ class SimulatedTagReader : public ITagReader {
   void begin() override { lastScanMs_ = millis(); }
 
   bool poll(std::string& uid) override {
-    if (!injected_.empty()) {  // `scan <uid>` / `burst n` from the console
+    // Manual `scan <uid>` / `burst n` always works, even while paused — the
+    // pause is only on the automatic every-10s generator.
+    if (!injected_.empty()) {
       uid = injected_.front();
       injected_.erase(injected_.begin());
       return true;
     }
+    if (!enabled_) return false;
     uint32_t now = millis();
     if (now - lastScanMs_ < SCAN_INTERVAL_MS) return false;
     lastScanMs_ = now;
@@ -36,6 +39,12 @@ class SimulatedTagReader : public ITagReader {
   }
 
   void inject(const std::string& uid) { injected_.push_back(uid); }
+
+  bool enabled() const { return enabled_; }
+  void setEnabled(bool on) {
+    enabled_ = on;
+    if (on) lastScanMs_ = millis();  // full interval before the next scan
+  }
   // Synthetic unique UIDs: reusing roster UIDs would just trip the 10s
   // cooldown and queue a tenth of what you asked for.
   void injectBurst(size_t n) {
@@ -47,6 +56,7 @@ class SimulatedTagReader : public ITagReader {
   }
 
  private:
+  bool enabled_ = true;
   uint32_t lastScanMs_ = 0;
   size_t next_ = 0;
   uint32_t burstSeq_ = 1;

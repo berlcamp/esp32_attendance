@@ -266,8 +266,9 @@ static void printStatus() {
   const size_t depth = g_queue->pending();
   UNLOCK_QUEUE();
   Serial.printf(
-      "[status] wifi=%s ip=%s rssi=%d net=%s clock=%s queue=%u sent=%u "
+      "[status] sim=%s wifi=%s ip=%s rssi=%d net=%s clock=%s queue=%u sent=%u "
       "failed=%u dropped=%u dup=%u corrupt=%u heap=%uKB up=%llds\n",
+      g_reader.enabled() ? "on" : "OFF",
       WiFi.status() == WL_CONNECTED ? "up" : "down",
       WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
       g_netEnabled ? "on" : "off", g_time.synced() ? "synced" : "UNSYNCED",
@@ -281,6 +282,8 @@ static void printHelp() {
   Serial.println(
       "commands:\n"
       "  status            current state\n"
+      "  sim off | stop    STOP generating scans (persists across reboot)\n"
+      "  sim on  | start   resume generating scans every 10s\n"
       "  net on|off        simulate internet up/down (WiFi stays connected)\n"
       "  queue depth       pending event count\n"
       "  queue dump        print up to 20 pending events\n"
@@ -299,6 +302,18 @@ static void handleCommand(std::string cmd) {
     printHelp();
   } else if (cmd == "status") {
     printStatus();
+  } else if (cmd == "sim off" || cmd == "stop") {
+    g_reader.setEnabled(false);
+    g_prefs.putBool("sim", false);
+    Serial.println(
+        "[sim] STOPPED — no new scans are being generated. Survives reboot. "
+        "Resume with 'sim on'.");
+  } else if (cmd == "sim on" || cmd == "start") {
+    g_reader.setEnabled(true);
+    g_prefs.putBool("sim", true);
+    Serial.println("[sim] RUNNING — one scan every 10s.");
+  } else if (cmd == "sim") {
+    Serial.printf("[sim] %s\n", g_reader.enabled() ? "running" : "stopped");
   } else if (cmd == "net off") {
     g_netEnabled = false;
     Serial.println("[net] OFF — scans will queue to flash");
@@ -380,6 +395,11 @@ void setup() {
 
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
   esp_task_wdt_add(NULL);
+
+  const bool simOn = g_prefs.getBool("sim", true);
+  g_reader.setEnabled(simOn);
+  Serial.printf("[sim] %s (change with 'sim on' / 'sim off')\n",
+                simOn ? "RUNNING — one scan every 10s" : "STOPPED");
 
   wifiConnect();
   g_time.begin();

@@ -31,13 +31,25 @@ pio test -e native               # queue + timestamp tests, on the Mac, no board
 
 | command | effect |
 |---|---|
-| `status` | wifi / clock / queue depth / counters |
+| `status` | sim / wifi / clock / queue depth / counters |
+| `sim off` (or `stop`) | **stop generating scans.** Persists across reboot and power cycles |
+| `sim on` (or `start`) | resume, one scan every 10s |
 | `net off` \| `net on` | simulate the internet dropping. WiFi stays connected, so this is reproducible in one keystroke |
 | `queue depth` \| `queue dump` \| `queue clear` | inspect or wipe the pending queue |
 | `scan <uid>` | inject one scan |
 | `burst <n>` | inject n scans with unique UIDs — the catch-up test |
 | `wifi` | force reconnect |
 | `reboot` | restart |
+
+### Stopping and starting the simulation
+
+`sim off` is the real off-switch: no new scans are created at all, and the
+choice is stored in NVS so a reboot or power cycle does not silently restart
+it. `net off` is a different thing — it simulates an *outage*, so scans keep
+being generated and pile up on flash to be flushed later.
+
+`scan <uid>` and `burst <n>` still work while stopped, so you can hand-feed
+individual events without the 10s generator running.
 
 ### Testing the offline path
 
