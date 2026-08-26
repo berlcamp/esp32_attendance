@@ -408,19 +408,32 @@ void setup() {
   xTaskCreatePinnedToCore(uploaderTask, "uploader", 12288, nullptr, 1, nullptr, 1);
 
   printHelp();
+  Serial.print("> ");
 }
 
 void loop() {
   esp_task_wdt_reset();
 
+  // Echo typed characters back: a USB serial terminal shows nothing at all
+  // otherwise, so you cannot see what you are typing or whether it landed.
   static std::string line;
   while (Serial.available()) {
     const char c = (char)Serial.read();
-    if (c == '\n') {
-      handleCommand(line);
+    if (c == '\n' || c == '\r') {
+      if (!line.empty()) {
+        Serial.println();
+        handleCommand(line);
+        Serial.print("> ");
+      }
       line.clear();
-    } else if (line.size() < 128) {
+    } else if (c == 8 || c == 127) {  // backspace / delete
+      if (!line.empty()) {
+        line.pop_back();
+        Serial.print("\b \b");
+      }
+    } else if (c >= 32 && line.size() < 128) {
       line += c;
+      Serial.write(c);
     }
   }
 
