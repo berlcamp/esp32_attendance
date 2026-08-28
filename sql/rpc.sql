@@ -1,6 +1,8 @@
 -- ===========================================================================
 -- Idempotent batch insert via a SECURITY DEFINER function.
 -- Run this AFTER sql/schema.sql. Safe to re-run.
+-- Carries image_path through to attendance; that column is defined in
+-- sql/schema.sql, so the documented order (schema, then rpc) still holds.
 --
 -- Why not just `GRANT SELECT ON attendance TO anon`?
 -- PostgREST's ignore-duplicates upsert compiles to ON CONFLICT (event_id) DO
@@ -28,7 +30,8 @@ begin
   end if;
 
   insert into mvts_esp32.attendance (
-    event_id, card_uid, device_id, scanned_at, clock_synced, direction, queued
+    event_id, card_uid, device_id, scanned_at, clock_synced, direction, queued,
+    image_path
   )
   select
     (e->>'event_id')::uuid,
@@ -37,7 +40,10 @@ begin
     (e->>'scanned_at')::timestamptz,
     coalesce((e->>'clock_synced')::boolean, false),
     coalesce(nullif(e->>'direction', ''), 'in'),
-    coalesce((e->>'queued')::boolean, false)
+    coalesce((e->>'queued')::boolean, false),
+    -- Storage path of the gate capture, or null. Null is not an error: the
+    -- uploader gives up on the image rather than let it hold back the event.
+    nullif(e->>'image_path', '')
   from jsonb_array_elements(events) as e
   where e->>'event_id' is not null
     and e->>'card_uid'  is not null

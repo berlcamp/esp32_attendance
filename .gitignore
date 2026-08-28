@@ -1,10 +1,19 @@
 # Secrets — NEVER commit
 include/secrets.h
+.env
+.env.*
+# ...but never the committed templates. A previous commit already had to
+# rescue web/.env.local.example from exactly this pattern in web/.gitignore.
+!*.example
 
 # PlatformIO
 .pio/
 .pioenvs/
 .piolibdeps/
+
+# Supabase CLI local state (holds the linked project ref)
+supabase/.temp/
+supabase/.branches/
 
 # Editors / OS
 .vscode/

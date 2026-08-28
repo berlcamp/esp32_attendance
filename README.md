@@ -15,7 +15,8 @@ USB-Serial/JTAG on `/dev/cu.usbmodem101`.
    schemas** → add `mvts_esp32`. Until you do, every POST returns
    `406 PGRST106` and the device just keeps queueing.
 2. **Run the SQL**, in order: `sql/schema.sql`, then `sql/rpc.sql`, then
-   `sql/seed.sql` for the nine simulated students.
+   `sql/seed.sql` for the nine simulated students. Add `sql/notify.sql` if you
+   want the Telegram notifications described below.
 3. Copy `include/secrets.h.example` → `include/secrets.h` and fill it in.
    `secrets.h` is gitignored.
 
@@ -114,6 +115,113 @@ The watchdog is for genuine wedges only.
 *new* scan is refused and logged loudly — the oldest events are the ones you'll
 be asked about later, so they are never silently discarded.
 
+## Telling parents
+
+`sql/notify.sql` plus `supabase/functions/` send a guardian a photo and a
+timestamp when their child passes the gate. The device is not involved and
+holds no new credentials.
+
+```
+tap -> capture -> queue -> Supabase Storage + record_attendance()
+                                     |
+                        Database Webhook on INSERT
+                                     |
+                         notify-guardian Edge Function
+                                     |
+                        claim_notifications() -> Telegram
+```
+
+**The bot token never goes near the device.** Flash is readable over USB. The
+anon key survives that because RLS limits it to one append-only RPC; a bot
+token has no such containment — whoever reads it can message every parent as
+the school, and read every reply. So the fan-out runs server-side, and the
+firmware's credentials do not change at all.
+
+**A replayed webhook must not re-message anyone.** `notifications` is keyed on
+`(event_id, guardian_id)` and `claim_notifications()` returns only the rows it
+newly inserted, so a webhook that fires twice hands the sender nothing the
+second time. It is the same `ON CONFLICT DO NOTHING` trick as
+`record_attendance()`, moved from *rows written* to *messages sent*. A
+duplicate attendance row is invisible; a duplicate "Ana arrived at school" at
+11pm is how parents stop trusting the system.
+
+**A three-hour outage must not page 200 parents at 4pm.** The device is built
+to queue through an outage and flush, which means a naive notifier announces a
+morning's arrivals at dinner time. `notify_config` holds the rule, in SQL,
+in one place: under 15 minutes late it sends normally, under two hours it
+sends and says it was delayed, beyond that it records the notification as
+`suppressed` and sends nothing. The sweeper re-measures too, so a message
+stuck failing for four hours is dropped rather than finally going out claiming
+the gate was "20 minutes late".
+
+**A guardian can only be reached if they made contact first.** Telegram bots
+cannot start a conversation — the API answers `Forbidden: bot can't initiate
+conversation with a user`. `issue_enroll_token()` mints a single-use token for
+a `https://t.me/<bot>?start=<token>` QR on the enrolment slip;
+`telegram-webhook` redeems it and stores the `chat_id`. Expect roughly 70% of
+parents to complete it, so plan for an unlinked-guardian list in the dashboard.
+
+**Photographs of minors are not kept forever.** Attendance rows are; captures
+are not. `notify_config.capture_retention_days` (default 30) drives
+`expired_captures()`. Collect written consent at enrolment — `/stop` in the bot
+sets `student_guardians.notify = false`, so the opt-out you promise on paper
+does something real.
+
+### Deploying it
+
+```bash
+./scripts/setup-telegram.sh
+```
+
+Eight stages: install and link the Supabase CLI, create the bot with
+@BotFather, generate the shared secrets, deploy both functions, register the
+Telegram webhook, add the Database Webhook, link yourself as a test guardian,
+then fire a fake scan and wait for your phone to buzz. It is re-runnable —
+secrets are kept in a gitignored `.env.notify` rather than rotated.
+
+The wizard exists because two secrets each have to match in two places
+(`WEBHOOK_SECRET` in Supabase *and* the webhook header; `TELEGRAM_WEBHOOK_SECRET`
+in Supabase *and* `setWebhook`), and a mismatch surfaces as a silent 403 in the
+function logs rather than an error anywhere you are looking.
+
+By hand instead:
+
+```bash
+supabase functions deploy notify-guardian  --no-verify-jwt
+supabase functions deploy telegram-webhook --no-verify-jwt
+supabase secrets set TELEGRAM_BOT_TOKEN=... WEBHOOK_SECRET=... \
+                     TELEGRAM_WEBHOOK_SECRET=... SCHOOL_NAME="..."
+```
+
+Then point Telegram at the bot webhook:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://<ref>.supabase.co/functions/v1/telegram-webhook",
+       "secret_token":"<TELEGRAM_WEBHOOK_SECRET>",
+       "allowed_updates":["message"]}'
+```
+
+and add a Database Webhook (Dashboard → Integrations → Database Webhooks) on
+INSERT into `mvts_esp32.attendance`, POSTing to `notify-guardian` with header
+`x-webhook-secret` — a custom header, not `Authorization`, which Studio has a
+known bug about silently dropping on save. The `pg_cron` sweeper for failed sends is in the comment
+above `retry_notifications()`.
+
+### Testing it without a board or a bot
+
+```bash
+docker run -d --rm --name gatepg -e POSTGRES_PASSWORD=pw -p 55433:5432 postgres:16
+PGPASSWORD=pw psql -h localhost -p 55433 -U postgres -v ON_ERROR_STOP=1 \
+  -f sql/test_bootstrap.sql -f sql/schema.sql -f sql/rpc.sql \
+  -f sql/seed.sql -f sql/notify.sql -f sql/test_notify.sql
+docker stop gatepg
+```
+
+15 checks covering dedupe, the staleness thresholds, opt-out, retry with
+`FOR UPDATE SKIP LOCKED`, the attempt ceiling, token single-use, and retention.
+
 ## Layout
 
 ```
@@ -121,7 +229,11 @@ lib/core/         pure C++, no Arduino — EventQueue, ScanEvent, Backoff, Stora
                   (this is what `pio test -e native` exercises)
 src/              firmware — tasks, WiFi, TLS, LittleFS backend, console, LED
 include/config.h  cadence, roster, batch size, caps, thresholds
-sql/              schema + seed
+sql/              schema + seed + guardian notifications (notify.sql) and
+                  their Postgres tests (test_notify.sql)
+supabase/functions/
+                  notify-guardian  — fans one scan out to Telegram
+                  telegram-webhook — guardian enrolment via /start deep link
 test/test_queue/  host tests: FIFO, restart, replay-after-crash, overflow,
                   compaction, interrupted compaction, clock reconstruction
 ```

@@ -55,8 +55,15 @@ create table if not exists mvts_esp32.attendance (
   received_at  timestamptz not null default now(),  -- when the server saw it
   clock_synced boolean not null default false, -- false = timestamp is inferred
   direction    text not null default 'in',     -- reserved; one reader = 'in'
-  queued       boolean not null default false  -- true = arrived after an outage
+  queued       boolean not null default false, -- true = arrived after an outage
+  -- Storage path of the gate capture. Nullable forever: the uploader gives up
+  -- on the image rather than let a failed upload hold back the attendance row.
+  image_path   text
 );
+
+-- For databases created before the camera existed.
+alter table mvts_esp32.attendance
+  add column if not exists image_path text;
 
 create index if not exists attendance_card_time_idx
   on mvts_esp32.attendance (card_uid, scanned_at desc);
