@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { FeedPayload } from "@/lib/types";
 import { StatTile } from "./StatTile";
@@ -72,6 +73,8 @@ export function Board() {
   }, []);
 
   const tz = data?.tz ?? "Asia/Manila";
+  // Distinct unknown UIDs waiting to be bound to a student.
+  const unknownCount = data?.stats?.unknownCards?.length ?? 0;
   const s = data?.stats;
   const flagged = (s?.lateSync ?? 0) + (s?.inferredTime ?? 0);
 
@@ -91,6 +94,15 @@ export function Board() {
           </p>
         </div>
         <div className="flex items-end gap-5">
+          <Link
+            href="/enroll"
+            className="border border-rule px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted transition-colors hover:border-amber hover:text-amber"
+          >
+            Enrol cards
+            {unknownCount > 0 && (
+              <span className="ml-2 text-amber">{unknownCount}</span>
+            )}
+          </Link>
           <GateStatus seconds={data?.gate?.secondsSince ?? null} />
           <StationClock tz={tz} />
         </div>

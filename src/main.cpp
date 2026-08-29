@@ -26,6 +26,7 @@
 #include "StatusLed.h"
 #include "SupabaseClient.h"
 #include "TagReader.h"
+#include "WiegandTagReader.h"
 #include "TimeSync.h"
 #include "config.h"
 #include "secrets.h"
@@ -35,7 +36,11 @@
 // ---------------------------------------------------------------------------
 static LittleFsStorage g_storage;
 static core::EventQueue* g_queue = nullptr;
+#if USE_WIEGAND_READER
+static WiegandTagReader g_reader(WIEGAND_D0, WIEGAND_D1);
+#else
 static SimulatedTagReader g_reader;
+#endif
 static TimeSync g_time;
 static SupabaseClient g_supa;
 static Preferences g_prefs;
@@ -398,8 +403,10 @@ void setup() {
 
   const bool simOn = g_prefs.getBool("sim", true);
   g_reader.setEnabled(simOn);
-  Serial.printf("[sim] %s (change with 'sim on' / 'sim off')\n",
-                simOn ? "RUNNING — one scan every 10s" : "STOPPED");
+  Serial.printf("[reader] %s (change with 'sim on' / 'sim off')\n",
+                simOn ? (USE_WIEGAND_READER ? "LIVE — waiting for cards"
+                                           : "SIMULATED — one scan every 10s")
+                      : "STOPPED — no scans accepted");
 
   wifiConnect();
   g_time.begin();

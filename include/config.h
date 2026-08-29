@@ -14,6 +14,13 @@
 // the anon key carries no table privileges at all. See sql/rpc.sql.
 #define SUPABASE_RPC "record_attendance"
 
+// ---- Reader --------------------------------------------------------------
+// 0 = simulated roster below, 1 = the real Wiegand reader on the pins below.
+// Find the pins with: pio run -e wiegand-probe -t upload, then swipe a card.
+#define USE_WIEGAND_READER 1
+#define WIEGAND_D0 4
+#define WIEGAND_D1 5
+
 // ---- Simulation ----------------------------------------------------------
 // Deterministic on purpose: a gap in Supabase is then a bug, not randomness.
 static constexpr uint32_t SCAN_INTERVAL_MS = 10000;   // one student per 10s

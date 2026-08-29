@@ -255,6 +255,70 @@ green = online and drained · amber = queueing · red = no WiFi · blue = bootin
 
 ## Swapping in a real RFID reader
 
-Implement `ITagReader` for the MFRC522 and construct it instead of
-`SimulatedTagReader` in `src/main.cpp`. Nothing else changes — the queue,
-uploader, dedupe, and timestamps have no idea where UIDs come from.
+The gate ships reading a simulated roster. Going live is three steps: find the
+pins, flip a switch, enrol the cards.
+
+### 1. Find which pins the reader is on
+
+Wiegand is one-way and has no identity to query — the reader just pulses two
+lines when a card passes. So you find the pins by watching all of them:
+
+```bash
+pio run -e wiegand-probe -t upload
+pio device monitor
+```
+
+Swipe a card. The probe watches every GPIO that is safe to touch on this board
+(USB, flash, PSRAM and strapping pins are excluded) and reports which two moved:
+
+```
+[wiegand] 26 pulse(s) across 2 pin(s):
+    GPIO4   9 pulse(s)
+    GPIO5  17 pulse(s)
+  26 bits — a standard Wiegand-26 frame
+    D0=GPIO4  D1=GPIO5  -> raw 0x2004A1B  facility=4 card=41243  parity OK  uid=04A1B2
+```
+
+D0 and D1 cannot be told apart by counting pulses, so the probe decodes both
+ways round; for a 26-bit frame the parity check picks the correct one.
+
+**Wire D0/D1 through a level shifter.** These readers are usually 12V parts that
+idle their data lines at 5V, and the ESP32-S3 is 3.3V-tolerant only. Reader
+ground must be tied to the ESP32's, or the pulses have no reference.
+
+### 2. Flip the switch
+
+In `include/config.h`, using the pins the probe reported:
+
+```c
+#define USE_WIEGAND_READER 1
+#define WIEGAND_D0 4
+#define WIEGAND_D1 5
+```
+
+```bash
+pio run -e esp32s3 -t upload
+```
+
+`WiegandTagReader` decodes 26- and 34-bit frames, rejects any frame that fails
+its parity check, and emits the card's facility+number as uppercase hex — the
+same UID the probe printed. Nothing downstream changes: the queue, the uploader,
+the notifications and the dashboard only ever see a UID string.
+
+`sim on` / `sim off` still gate the reader, and `scan <uid>` still injects one by
+hand, which is how you exercise the upload path with no card present.
+
+### 3. Enrol the cards
+
+Open **/enroll** on the dashboard. Tap a card on the gate; it appears under
+*Unassigned cards* within a few seconds, because the gate records every scan
+whether it recognises the card or not. Pick an existing student or type a new
+name, and press *Assign card*.
+
+Reassigning a card that someone else held retires the old mapping rather than
+overwriting it, so last term's attendance still resolves to whoever actually
+carried that card that day. The `×` next to a card retires it — for a card that
+is lost or broken.
+
+When you are finished with the simulator, `sql/reset_demo.sql` clears the nine
+seeded students and every simulated scan. It is destructive; read it first.
