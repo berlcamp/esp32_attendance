@@ -166,6 +166,54 @@ void test_unsynced_clock_is_reconstructed(void) {
 }
 
 // --- Backoff ------------------------------------------------------------
+
+// --- The counter must never be able to destroy the log ------------------
+// The uploader commits batch.size() as itemCount, but skips unparseable lines,
+// so itemCount can exceed what pending_ really was. The old commit() treated
+// "pending_ == 0" as proof the log was drained and truncated the file, taking
+// unsent events with it. The file is the truth; the counter is only a cache.
+void test_overstated_commit_does_not_destroy_unsent_events(void) {
+  core::PosixStorage st(kRoot);
+  core::EventQueue q(st, smallCfg());
+  TEST_ASSERT_TRUE(q.begin());
+
+  TEST_ASSERT_TRUE(q.push(ev("keep-me", 1000, true)));
+  TEST_ASSERT_TRUE(q.push(ev("and-me", 1001, true)));
+
+  // Send only the first, but claim both were handled.
+  size_t consumed = 0;
+  std::vector<std::string> batch = q.peek(1, consumed);
+  TEST_ASSERT_EQUAL_UINT32(1, batch.size());
+  TEST_ASSERT_TRUE(q.commit(consumed, 2));
+
+  // The second event is still on disk, so it must still be pending.
+  TEST_ASSERT_EQUAL_UINT32(1, q.pending());
+
+  size_t c2 = 0;
+  std::vector<std::string> rest = q.peek(10, c2);
+  TEST_ASSERT_EQUAL_UINT32(1, rest.size());
+  TEST_ASSERT_TRUE(rest[0].find("\"event_id\":\"and-me\"") != std::string::npos);
+}
+
+// A miscount must not survive a reboot either: begin() recounts from the file.
+void test_miscount_is_repaired_across_restart(void) {
+  {
+    core::PosixStorage st(kRoot);
+    core::EventQueue q(st, smallCfg());
+    TEST_ASSERT_TRUE(q.begin());
+    TEST_ASSERT_TRUE(q.push(ev("x", 1000, true)));
+    TEST_ASSERT_TRUE(q.push(ev("y", 1001, true)));
+    size_t consumed = 0;
+    std::vector<std::string> batch = q.peek(1, consumed);
+    TEST_ASSERT_TRUE(q.commit(consumed, 99));  // wildly overstated
+  }
+  core::PosixStorage st(kRoot);
+  core::EventQueue q(st, smallCfg());
+  TEST_ASSERT_TRUE(q.begin());
+  TEST_ASSERT_EQUAL_UINT32(1, q.pending());
+  TEST_ASSERT_TRUE(q.dataBytes() > 0);
+}
+
 void test_backoff_doubles_and_caps(void) {
   core::Backoff b(1000, 8000);
   TEST_ASSERT_EQUAL_UINT32(1000, b.delayMs());
@@ -192,6 +240,8 @@ int main(int, char**) {
   RUN_TEST(test_recovers_from_interrupted_compaction);
   RUN_TEST(test_late_event_is_flagged_queued);
   RUN_TEST(test_unsynced_clock_is_reconstructed);
+  RUN_TEST(test_overstated_commit_does_not_destroy_unsent_events);
+  RUN_TEST(test_miscount_is_repaired_across_restart);
   RUN_TEST(test_backoff_doubles_and_caps);
   return UNITY_END();
 }

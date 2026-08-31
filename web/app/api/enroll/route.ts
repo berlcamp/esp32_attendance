@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { serverClient } from "@/lib/supabase";
+import { serverClient, gateSchool, type RosterRow } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 // UIDs are uppercase hex everywhere in this system — the device emits them
-// that way. Normalising here means a hand-typed uid still matches the scans.
+// that way, and pta.student_cards has a CHECK that says so. Normalising here
+// means a hand-typed uid still matches the scans.
 function normalizeUid(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const uid = raw.trim().toUpperCase();
@@ -14,34 +15,46 @@ function normalizeUid(raw: unknown): string | null {
 
 type ScanRow = { card_uid: string; scanned_at: string; student_id: string | null };
 type CardRow = { card_uid: string; student_id: string; issued_at: string };
-type StudentRow = { id: string; full_name: string; student_no: string | null };
 
-/** Cards seen at the gate that no student currently holds, plus the roster. */
+const EMPTY = { configured: false, error: null as string | null, school: null as string | null, unassigned: [], students: [] };
+
+/** Cards seen at this gate that no student currently holds, plus the roster. */
 export async function GET() {
   const sb = serverClient();
   if (!sb) {
     return NextResponse.json(
-      { configured: false, error: "Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY", unassigned: [], students: [] },
+      { ...EMPTY, error: "Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" },
       { status: 200 },
     );
   }
 
-  const [scansRes, studentsRes, cardsRes] = await Promise.all([
+  const { school, error: schoolErr } = await gateSchool(sb);
+  if (!school) {
+    return NextResponse.json({ ...EMPTY, configured: true, error: schoolErr }, { status: 200 });
+  }
+
+  const [scansRes, rosterRes, cardsRes] = await Promise.all([
     sb.from("attendance_resolved")
       .select("card_uid, scanned_at, student_id")
+      .eq("school_id", school.schoolId)
       .is("student_id", null)
       .order("scanned_at", { ascending: false })
       .limit(500),
-    sb.from("students").select("id, full_name, student_no").order("full_name"),
+    // The roster comes from PTA Collections. This app does not create students.
+    sb.from("gate_roster")
+      .select("student_id, full_name, student_no, grade_level, section_name")
+      .eq("school_id", school.schoolId)
+      .order("full_name"),
     sb.from("student_cards")
       .select("card_uid, student_id, issued_at")
+      .eq("school_id", school.schoolId)
       .is("revoked_at", null),
   ]);
 
-  const err = scansRes.error ?? studentsRes.error ?? cardsRes.error;
+  const err = scansRes.error ?? rosterRes.error ?? cardsRes.error;
   if (err) {
     return NextResponse.json(
-      { configured: true, error: err.message, unassigned: [], students: [] },
+      { ...EMPTY, configured: true, school: school.schoolName, error: err.message },
       { status: 200 },
     );
   }
@@ -66,28 +79,40 @@ export async function GET() {
     if (seen) seen.scans += 1;
     else byUid.set(r.card_uid, { cardUid: r.card_uid, lastSeenAt: r.scanned_at, scans: 1 });
   }
-  const students = ((studentsRes.data ?? []) as StudentRow[]).map((s) => ({
-    id: s.id,
+
+  const students = ((rosterRes.data ?? []) as RosterRow[]).map((s) => ({
+    id: s.student_id,
     name: s.full_name,
     studentNo: s.student_no,
-    cards: cards.filter((c) => c.student_id === s.id).map((c) => c.card_uid),
+    gradeLevel: s.grade_level,
+    section: s.section_name,
+    cards: cards.filter((c) => c.student_id === s.student_id).map((c) => c.card_uid),
   }));
 
   return NextResponse.json({
     configured: true,
     error: null,
+    school: school.schoolName,
     unassigned: [...byUid.values()],
     students,
   });
 }
 
 /**
- * Assign a card to a student, creating the student if needed.
- * Body: { cardUid, studentId } or { cardUid, fullName, studentNo? }
+ * Assign a card to a student already on the PTA roster.
+ * Body: { cardUid, studentId }
+ *
+ * There is deliberately no "create a student" path here any more. A student
+ * invented at the gate would have no enrolment row, so no school year, no
+ * section and no student number — invisible in PTA Collections and unbillable.
+ * Students are created there; this page only binds a piece of plastic to one.
  */
 export async function POST(req: Request) {
   const sb = serverClient();
   if (!sb) return NextResponse.json({ error: "Supabase is not configured" }, { status: 500 });
+
+  const { school, error: schoolErr } = await gateSchool(sb);
+  if (!school) return NextResponse.json({ error: schoolErr }, { status: 500 });
 
   let body: Record<string, unknown>;
   try {
@@ -104,36 +129,31 @@ export async function POST(req: Request) {
     );
   }
 
-  let studentId = typeof body.studentId === "string" ? body.studentId : null;
-
+  const studentId = typeof body.studentId === "string" ? body.studentId : null;
   if (!studentId) {
-    const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
-    if (!fullName) {
-      return NextResponse.json(
-        { error: "Give either an existing studentId or a fullName for a new student" },
-        { status: 400 },
-      );
-    }
-    const studentNo =
-      typeof body.studentNo === "string" && body.studentNo.trim()
-        ? body.studentNo.trim()
-        : null;
+    return NextResponse.json(
+      { error: "Pick a student from the roster. Add new students in PTA Collections." },
+      { status: 400 },
+    );
+  }
 
-    const created = await sb
-      .from("students")
-      .insert({ full_name: fullName, student_no: studentNo })
-      .select("id")
-      .single();
+  // Belt and braces: the composite FK on pta.student_cards already refuses a
+  // student from another school, but a clear 404 beats a foreign key error.
+  const onRoster = await sb
+    .from("gate_roster")
+    .select("student_id")
+    .eq("school_id", school.schoolId)
+    .eq("student_id", studentId)
+    .maybeSingle();
 
-    if (created.error) {
-      // student_no is UNIQUE; a duplicate is a typo, not a server fault.
-      const dup = created.error.code === "23505";
-      return NextResponse.json(
-        { error: dup ? `Student number ${studentNo} is already taken` : created.error.message },
-        { status: dup ? 409 : 500 },
-      );
-    }
-    studentId = created.data.id as string;
+  if (onRoster.error) {
+    return NextResponse.json({ error: onRoster.error.message }, { status: 500 });
+  }
+  if (!onRoster.data) {
+    return NextResponse.json(
+      { error: "That student is not enrolled at this school in the active school year." },
+      { status: 404 },
+    );
   }
 
   // A card can only have one active holder (enforced by
@@ -143,6 +163,7 @@ export async function POST(req: Request) {
   const revoked = await sb
     .from("student_cards")
     .update({ revoked_at: new Date().toISOString() })
+    .eq("school_id", school.schoolId)
     .eq("card_uid", cardUid)
     .is("revoked_at", null)
     .select("student_id");
@@ -153,7 +174,7 @@ export async function POST(req: Request) {
 
   const issued = await sb
     .from("student_cards")
-    .insert({ student_id: studentId, card_uid: cardUid })
+    .insert({ school_id: school.schoolId, student_id: studentId, card_uid: cardUid })
     .select("id")
     .single();
 
@@ -174,6 +195,9 @@ export async function DELETE(req: Request) {
   const sb = serverClient();
   if (!sb) return NextResponse.json({ error: "Supabase is not configured" }, { status: 500 });
 
+  const { school, error: schoolErr } = await gateSchool(sb);
+  if (!school) return NextResponse.json({ error: schoolErr }, { status: 500 });
+
   let body: Record<string, unknown>;
   try {
     body = await req.json();
@@ -187,6 +211,7 @@ export async function DELETE(req: Request) {
   const res = await sb
     .from("student_cards")
     .update({ revoked_at: new Date().toISOString() })
+    .eq("school_id", school.schoolId)
     .eq("card_uid", cardUid)
     .is("revoked_at", null)
     .select("id");

@@ -14,6 +14,7 @@ export function SetupNotice({ error, hint }: { error: string; hint?: string | nu
           <pre className="overflow-x-auto border border-rule bg-ink p-4 font-mono text-[11px] leading-relaxed text-muted">
 {`SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service_role key>
+GATE_DEVICE_ID=gate-01
 SCHOOL_TZ=Asia/Manila`}
           </pre>
           <p>
@@ -23,10 +24,12 @@ SCHOOL_TZ=Asia/Manila`}
         </div>
       ) : (
         <p className="mt-6 text-sm text-muted">
-          If this says permission denied, run{" "}
-          <code className="text-amber">sql/web.sql</code> in the Supabase SQL
-          editor to grant the service role access to the{" "}
-          <code className="text-amber">mvts_esp32</code> schema.
+          If this says permission denied, apply{" "}
+          <code className="text-amber">0013_gate_attendance.sql</code> from the
+          pta-collections repo — its closing grants are what give the service
+          role access to the <code className="text-amber">pta</code> schema. If
+          it says the gate device is not registered, run{" "}
+          <code className="text-amber">sql/cutover.sql</code>.
         </p>
       )}
     </div>

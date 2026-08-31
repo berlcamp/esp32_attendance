@@ -1,8 +1,12 @@
-# RFID Attendance Gate — ESP32-S3 simulation
+# RFID Attendance Gate — ESP32-S3
 
-Firmware for a school-gate attendance reader. The RFID reader is currently
-**simulated** (one student every 10 seconds); everything downstream of it —
-WiFi, TLS, the durable offline queue, Supabase inserts — is real.
+Firmware for a school-gate attendance reader, plus the board that shows it.
+
+The roster is **not this project's**. Students, guardians and school years come
+from **PTA Collections** (`~/Documents/GithubBuilds/pta-collections`), which
+shares the same Supabase project. The gate adds cards and taps to that database
+and owns nothing about who a student is. A student enrolled in PTA Collections
+is at the gate immediately; there is no second list to keep in step.
 
 Hardware in use: **ESP32-S3** (rev 0.2), 16MB flash, 8MB octal PSRAM, native
 USB-Serial/JTAG on `/dev/cu.usbmodem101`.
@@ -11,14 +15,22 @@ USB-Serial/JTAG on `/dev/cu.usbmodem101`.
 
 ## Before it can send anything
 
-1. **Expose the schema.** Supabase Dashboard → **Settings → API → Exposed
-   schemas** → add `mvts_esp32`. Until you do, every POST returns
-   `406 PGRST106` and the device just keeps queueing.
-2. **Run the SQL**, in order: `sql/schema.sql`, then `sql/rpc.sql`, then
-   `sql/seed.sql` for the nine simulated students. Add `sql/notify.sql` if you
-   want the Telegram notifications described below.
+1. **Apply the schema.** The gate's tables live in the `pta` schema and are
+   defined in one migration, in the other repo:
+   `../../pta-collections/supabase/migrations/0013_gate_attendance.sql`.
+   Paste it into the Supabase SQL Editor. Never `supabase db push` — the
+   project is shared with two other apps and a push proposes dropping their
+   objects.
+2. **Register the gate.** Edit the school code at the top of `sql/cutover.sql`
+   and run it. That inserts the `pta.gate_devices` row which maps `DEVICE_ID`
+   to a school; without it `record_attendance()` refuses every batch and the
+   device just keeps queueing.
 3. Copy `include/secrets.h.example` → `include/secrets.h` and fill it in.
    `secrets.h` is gitignored.
+4. For the dashboard, copy `web/.env.local.example` → `web/.env.local`.
+
+`pta` is already listed under **Settings → API → Exposed schemas** for PTA
+Collections. If it ever is not, every POST returns `404 PGRST106`.
 
 ## Build / flash / watch
 
@@ -32,9 +44,9 @@ pio test -e native               # queue + timestamp tests, on the Mac, no board
 
 | command | effect |
 |---|---|
-| `status` | sim / wifi / clock / queue depth / counters |
-| `sim off` (or `stop`) | **stop generating scans.** Persists across reboot and power cycles |
-| `sim on` (or `start`) | resume, one scan every 10s |
+| `status` | reader / wifi / clock / queue depth / counters |
+| `reader off` | **stop accepting scans.** Persists across reboot and power cycles |
+| `reader on` | resume |
 | `net off` \| `net on` | simulate the internet dropping. WiFi stays connected, so this is reproducible in one keystroke |
 | `queue depth` \| `queue dump` \| `queue clear` | inspect or wipe the pending queue |
 | `scan <uid>` | inject one scan |
@@ -42,15 +54,24 @@ pio test -e native               # queue + timestamp tests, on the Mac, no board
 | `wifi` | force reconnect |
 | `reboot` | restart |
 
-### Stopping and starting the simulation
+### Stopping and starting the reader
 
-`sim off` is the real off-switch: no new scans are created at all, and the
-choice is stored in NVS so a reboot or power cycle does not silently restart
-it. `net off` is a different thing — it simulates an *outage*, so scans keep
-being generated and pile up on flash to be flushed later.
+`reader off` is the real off-switch: no scans are accepted at all — from a real
+card or from the simulator — and the choice is stored in NVS so a reboot, a
+power cycle, *or a reflash* does not silently restart it.
+
+That persistence bites if you forget it. A device left on `reader off` will
+ignore real cards after you fit the hardware and reflash, looking for all the
+world like a wiring fault. `status` shows `reader=OFF` when this is why.
+
+`sim on` / `sim off` / `start` / `stop` are kept as aliases, since the switch
+was called that back when the only scan source was the simulator.
+
+`net off` is a different thing — it simulates an *outage*, so scans keep being
+generated and pile up on flash to be flushed later.
 
 `scan <uid>` and `burst <n>` still work while stopped, so you can hand-feed
-individual events without the 10s generator running.
+individual events without the generator running.
 
 ### Testing the offline path
 
@@ -82,7 +103,7 @@ uploader only ever drains; the HTTP call happens outside the queue mutex.
 **Nothing is deleted until Supabase says yes.** The queue advances a persisted
 cursor only after a 2xx. A crash between "Postgres inserted" and "cursor saved"
 re-sends the batch, which is harmless: `event_id` is a client-generated UUID
-and the primary key, and `mvts_esp32.record_attendance()` inserts with
+and the primary key, and `pta.record_attendance()` inserts with
 `ON CONFLICT (event_id) DO NOTHING`. Retries can never create a duplicate row.
 
 **The device has no table privileges.** It posts batches to the SECURITY
@@ -91,6 +112,14 @@ DEFINER function `record_attendance()` and holds `EXECUTE` on that alone — no
 would have required `GRANT SELECT ON attendance TO anon` (Postgres needs SELECT
 to infer an `ON CONFLICT` target), which would put every student's movement
 history one accidental policy away from the public anon key.
+
+**The device cannot say which school it is at.** It sends `DEVICE_ID` and
+nothing else about where it is; `pta.gate_devices` maps that to a school and
+`record_attendance()` stamps `school_id` from there. The database is now
+multi-tenant, so "trust the device's claim" would mean a stolen anon key could
+write attendance into any school in the system. An unregistered device is
+refused outright rather than skipped — refusing leaves the events safe on flash,
+whereas skipping would destroy them while reporting success.
 
 **Timestamps are honest about themselves.** The S3 has no battery-backed RTC,
 so after a power cut it boots believing it is 1970. Scans taken before NTP
@@ -117,14 +146,15 @@ be asked about later, so they are never silently discarded.
 
 ## Telling parents
 
-`sql/notify.sql` plus `supabase/functions/` send a guardian a photo and a
-timestamp when their child passes the gate. The device is not involved and
-holds no new credentials.
+`supabase/functions/` plus the trigger in `sql/webhook.sql` send a guardian a
+photo and a timestamp when their child passes the gate. Guardians are PTA
+Collections' `parents_guardians` rows; the gate only adds a `telegram_chat_id`
+to them. The device is not involved and holds no new credentials.
 
 ```
 tap -> capture -> queue -> Supabase Storage + record_attendance()
                                      |
-                        Database Webhook on INSERT
+                        pg_net trigger on INSERT
                                      |
                          notify-guardian Edge Function
                                      |
@@ -175,14 +205,16 @@ does something real.
 
 Eight stages: install and link the Supabase CLI, create the bot with
 @BotFather, generate the shared secrets, deploy both functions, register the
-Telegram webhook, add the Database Webhook, link yourself as a test guardian,
-then fire a fake scan and wait for your phone to buzz. It is re-runnable —
-secrets are kept in a gitignored `.env.notify` rather than rotated.
+Telegram webhook, install the attendance trigger, link yourself as a test
+guardian, then fire a fake scan and wait for your phone to buzz. It is
+re-runnable — secrets are kept in a gitignored `.env.notify` rather than
+rotated.
 
 The wizard exists because two secrets each have to match in two places
-(`WEBHOOK_SECRET` in Supabase *and* the webhook header; `TELEGRAM_WEBHOOK_SECRET`
-in Supabase *and* `setWebhook`), and a mismatch surfaces as a silent 403 in the
-function logs rather than an error anywhere you are looking.
+(`WEBHOOK_SECRET` in Supabase *and* the trigger in `sql/webhook.sql`;
+`TELEGRAM_WEBHOOK_SECRET` in Supabase *and* `setWebhook`), and a mismatch
+surfaces as a silent 403 in the function logs rather than an error anywhere you
+are looking.
 
 By hand instead:
 
@@ -203,24 +235,31 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
        "allowed_updates":["message"]}'
 ```
 
-and add a Database Webhook (Dashboard → Integrations → Database Webhooks) on
-INSERT into `mvts_esp32.attendance`, POSTing to `notify-guardian` with header
-`x-webhook-secret` — a custom header, not `Authorization`, which Studio has a
-known bug about silently dropping on save. The `pg_cron` sweeper for failed sends is in the comment
-above `retry_notifications()`.
+then paste `sql/webhook.sql` into the SQL editor with `WEBHOOK_SECRET` filled
+in. That installs a `pg_net` trigger on INSERT into `pta.attendance` — async, so
+a slow Telegram can never block a student walking through the gate. The
+`pg_cron` sweeper for failed sends is in the comment above
+`retry_notifications()`.
 
 ### Testing it without a board or a bot
 
 ```bash
 docker run -d --rm --name gatepg -e POSTGRES_PASSWORD=pw -p 55433:5432 postgres:16
-PGPASSWORD=pw psql -h localhost -p 55433 -U postgres -v ON_ERROR_STOP=1 \
-  -f sql/test_bootstrap.sql -f sql/schema.sql -f sql/rpc.sql \
-  -f sql/seed.sql -f sql/notify.sql -f sql/test_notify.sql
+export PGPASSWORD=pw PTA=../../pta-collections/supabase/migrations
+psql -h localhost -p 55433 -U postgres -v ON_ERROR_STOP=1 \
+     -f sql/test_bootstrap.sql $(for f in $PTA/0*.sql; do echo -n "-f $f "; done) \
+     -f sql/test_notify.sql
 docker stop gatepg
 ```
 
-15 checks covering dedupe, the staleness thresholds, opt-out, retry with
-`FOR UPDATE SKIP LOCKED`, the attempt ceiling, token single-use, and retention.
+21 checks covering dedupe, the staleness thresholds, opt-out, retry with
+`FOR UPDATE SKIP LOCKED`, the attempt ceiling, token single-use, retention,
+unregistered devices, the `anon` and `service_role` grant surfaces, and
+tenancy — the same card UID issued at two schools must resolve to two different
+children and notify only one set of parents.
+
+The real `pta` migrations are loaded rather than a hand-copied fixture, so these
+tests fail if that schema drifts. That is the point of running them.
 
 ## Layout
 
@@ -228,15 +267,21 @@ docker stop gatepg
 lib/core/         pure C++, no Arduino — EventQueue, ScanEvent, Backoff, Storage
                   (this is what `pio test -e native` exercises)
 src/              firmware — tasks, WiFi, TLS, LittleFS backend, console, LED
-include/config.h  cadence, roster, batch size, caps, thresholds
-sql/              schema + seed + guardian notifications (notify.sql) and
-                  their Postgres tests (test_notify.sql)
+include/config.h  device id, schema, cadence, batch size, caps, thresholds
+sql/              cutover.sql (one-time move onto pta), webhook.sql (the
+                  notify trigger), and the Postgres test suite. The schema
+                  ITSELF lives in the pta-collections repo — see sql/README.md
+web/              the gate board and /enroll (Next.js, service_role, one school)
 supabase/functions/
                   notify-guardian  — fans one scan out to Telegram
                   telegram-webhook — guardian enrolment via /start deep link
 test/test_queue/  host tests: FIFO, restart, replay-after-crash, overflow,
                   compaction, interrupted compaction, clock reconstruction
 ```
+
+The schema is in the other repo on purpose. `pta`'s version history belongs to
+PTA Collections, and a second copy here would be a second thing to keep in step
+— one that would lose the argument the moment they disagreed.
 
 ## Status LED
 
@@ -248,15 +293,23 @@ green = online and drained · amber = queueing · red = no WiFi · blue = bootin
   not *"a student was present"*. `direction` is reserved and always `'in'`;
   deriving attendance from first-scan-of-day is a rule your app applies.
 - The anon key is in the firmware image and flash is readable over USB. That is
-  acceptable only because RLS limits that key to `INSERT` on one table. Moving
-  to an Edge Function with a per-device secret is the next hardening step.
+  acceptable only because that key can do exactly one thing: `EXECUTE`
+  `pta.record_attendance()`, for a device that is registered. Moving to an Edge
+  Function with a per-device secret is the next hardening step.
+- **The dashboard has no auth and reads with `service_role`, which bypasses
+  RLS.** It is scoped to one school by resolving `GATE_DEVICE_ID` through
+  `pta.gate_devices` and filtering every query on the result — in application
+  code, not in the database. That is thinner than it should be for a
+  multi-tenant database. Giving the board real staff auth, and dropping the
+  `service_role` read grant added by `0013_gate_attendance.sql`, is the
+  follow-up.
 - No OTA yet — but the partition slot is reserved, because repartitioning later
   would erase the filesystem, and the filesystem is the queue.
 
 ## Swapping in a real RFID reader
 
-The gate ships reading a simulated roster. Going live is three steps: find the
-pins, flip a switch, enrol the cards.
+`USE_WIEGAND_READER` is already `1`. If you are starting from a bare board,
+going live is three steps: find the pins, flip a switch, enrol the cards.
 
 ### 1. Find which pins the reader is on
 
@@ -305,20 +358,23 @@ its parity check, and emits the card's facility+number as uppercase hex — the
 same UID the probe printed. Nothing downstream changes: the queue, the uploader,
 the notifications and the dashboard only ever see a UID string.
 
-`sim on` / `sim off` still gate the reader, and `scan <uid>` still injects one by
-hand, which is how you exercise the upload path with no card present.
+`reader on` / `reader off` gate the real reader exactly as they gated the
+simulator, and `scan <uid>` still injects one by hand, which is how you
+exercise the upload path with no card present.
 
 ### 3. Enrol the cards
 
 Open **/enroll** on the dashboard. Tap a card on the gate; it appears under
 *Unassigned cards* within a few seconds, because the gate records every scan
-whether it recognises the card or not. Pick an existing student or type a new
-name, and press *Assign card*.
+whether it recognises the card or not. Search the roster, pick the student, and
+press *Assign card*.
+
+**The roster is PTA Collections'.** This page binds plastic to people; it does
+not create people. A student invented at the gate would have no enrolment row —
+no school year, no section, no student number — and would be invisible in the
+app that actually bills their parents. If someone is missing, add them there.
 
 Reassigning a card that someone else held retires the old mapping rather than
 overwriting it, so last term's attendance still resolves to whoever actually
 carried that card that day. The `×` next to a card retires it — for a card that
 is lost or broken.
-
-When you are finished with the simulator, `sql/reset_demo.sql` clears the nine
-seeded students and every simulated scan. It is destructive; read it first.

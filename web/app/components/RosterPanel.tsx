@@ -27,7 +27,7 @@ export function RosterPanel({
       <ul className="max-h-[560px] divide-y divide-rule-soft overflow-y-auto">
         {roster.length === 0 && (
           <li className="px-5 py-10 text-center font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
-            No students enrolled
+            No students enrolled this school year
           </li>
         )}
         {roster.map((s) => (
@@ -40,7 +40,9 @@ export function RosterPanel({
                 {s.name}
               </div>
               <div className="font-mono text-[10px] tracking-wider text-muted">
-                {s.studentNo ?? "—"}
+                {[s.studentNo, [s.gradeLevel, s.section].filter(Boolean).join(" · ")]
+                  .filter(Boolean)
+                  .join(" · ") || "—"}
               </div>
             </div>
             <div className="shrink-0 text-right">

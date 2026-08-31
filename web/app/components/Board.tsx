@@ -83,14 +83,17 @@ export function Board() {
       {/* Masthead ---------------------------------------------------------- */}
       <header className="flex flex-wrap items-end justify-between gap-6">
         <div>
+          {/* The board is scoped to one school now, and service_role can see
+              every school — so which one this is belongs on screen. */}
           <div className="font-mono text-[10px] uppercase tracking-[0.4em] text-amber">
-            {data?.gate?.deviceId ?? "gate-01"} · school gate
+            {data?.gate?.deviceId ?? "gate-01"} · {data?.school ?? "school gate"}
           </div>
           <h1 className="mt-2 text-5xl font-extrabold leading-[0.9] tracking-[-0.03em] text-paper sm:text-6xl">
             Smart<span className="text-amber">.</span>Campus
           </h1>
           <p className="mt-3 max-w-md text-sm text-muted">
-            Live attendance as cards pass the gate.
+            Live attendance as cards pass the gate. The roster comes from PTA
+            Collections.
           </p>
         </div>
         <div className="flex items-end gap-5">

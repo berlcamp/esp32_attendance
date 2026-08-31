@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const POLL_MS = 3000;
 
 type UnassignedCard = { cardUid: string; lastSeenAt: string; scans: number };
-type EnrollStudent = { id: string; name: string; studentNo: string | null; cards: string[] };
+type EnrollStudent = {
+  id: string;
+  name: string;
+  studentNo: string | null;
+  gradeLevel: string | null;
+  section: string | null;
+  cards: string[];
+};
 type EnrollPayload = {
   configured: boolean;
   error: string | null;
+  school: string | null;
   unassigned: UnassignedCard[];
   students: EnrollStudent[];
 };
@@ -31,13 +39,15 @@ function ago(iso: string): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+function classOf(s: EnrollStudent): string {
+  return [s.gradeLevel, s.section].filter(Boolean).join(" · ");
+}
+
 export function EnrollPanel() {
   const [data, setData] = useState<EnrollPayload | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [mode, setMode] = useState<"existing" | "new">("existing");
   const [studentId, setStudentId] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [studentNo, setStudentNo] = useState("");
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
 
@@ -62,28 +72,35 @@ export function EnrollPanel() {
     if (json) setData(json);
   };
 
+  // A real school roster is hundreds of names, so this is a search box rather
+  // than a <select>. Name, student number and section all match, because at a
+  // gate the operator knows "Grade 7 Rizal" long before they know an LRN.
+  const matches = useMemo(() => {
+    const all = data?.students ?? [];
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((s) =>
+      [s.name, s.studentNo ?? "", classOf(s)].join(" ").toLowerCase().includes(q),
+    );
+  }, [data?.students, query]);
+
+  const chosen = data?.students.find((s) => s.id === studentId) ?? null;
+
   const submit = async () => {
-    if (!selected) return;
+    if (!selected || !studentId) return;
     setBusy(true);
     setFlash(null);
     try {
       const res = await fetch("/api/enroll", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          mode === "existing"
-            ? { cardUid: selected, studentId }
-            : { cardUid: selected, fullName, studentNo },
-        ),
+        body: JSON.stringify({ cardUid: selected, studentId }),
       });
       const json = await res.json();
       if (!res.ok) {
         setFlash({ tone: "bad", text: json.error ?? "Assignment failed" });
       } else {
-        const who =
-          mode === "existing"
-            ? (data?.students.find((s) => s.id === studentId)?.name ?? "student")
-            : fullName;
+        const who = chosen?.name ?? "student";
         setFlash({
           tone: "ok",
           text: json.replaced
@@ -91,9 +108,8 @@ export function EnrollPanel() {
             : `${selected} assigned to ${who}.`,
         });
         setSelected(null);
-        setFullName("");
-        setStudentNo("");
         setStudentId("");
+        setQuery("");
         await refresh();
       }
     } catch (e) {
@@ -118,12 +134,11 @@ export function EnrollPanel() {
     }
   };
 
-  const canSubmit =
-    !!selected && !busy && (mode === "existing" ? !!studentId : fullName.trim().length > 0);
+  const canSubmit = !!selected && !!studentId && !busy;
 
-  if (data && !data.configured) {
+  if (data && (!data.configured || data.error)) {
     return (
-      <p className="border border-alarm/40 bg-alarm/5 px-5 py-4 font-mono text-[11px] text-alarm">
+      <p className="border border-alarm/40 bg-alarm/5 px-5 py-4 font-mono text-[11px] leading-relaxed text-alarm">
         {data.error}
       </p>
     );
@@ -184,10 +199,15 @@ export function EnrollPanel() {
 
       {/* ---- Assignment --------------------------------------------------- */}
       <section className="border border-rule bg-surface/40">
-        <header className="border-b border-rule px-5 py-3">
+        <header className="flex items-baseline justify-between border-b border-rule px-5 py-3">
           <h2 className="font-mono text-[11px] uppercase tracking-[0.28em] text-paper">
             Assign to student
           </h2>
+          {data?.school && (
+            <span className="truncate font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
+              {data.school}
+            </span>
+          )}
         </header>
 
         <div className="space-y-5 px-5 py-5">
@@ -204,69 +224,69 @@ export function EnrollPanel() {
             </span>
           </div>
 
-          <div className="flex gap-2">
-            {(["existing", "new"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMode(m)}
-                className={`border px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors ${
-                  mode === m
-                    ? "border-amber text-amber"
-                    : "border-rule text-muted hover:border-rule-soft hover:text-paper"
-                }`}
-              >
-                {m === "existing" ? "Existing student" : "New student"}
-              </button>
-            ))}
-          </div>
-
-          {mode === "existing" ? (
+          <div className="space-y-2">
             <label className="block space-y-2">
               <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
                 Student
               </span>
-              <select
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                className="w-full border border-rule bg-ink px-3 py-2 font-mono text-sm text-paper outline-none focus:border-amber"
-              >
-                <option value="">— select —</option>
-                {data?.students.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                    {s.studentNo ? ` · ${s.studentNo}` : ""}
-                    {s.cards.length ? ` (holds ${s.cards.length})` : ""}
-                  </option>
-                ))}
-              </select>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search name, student number or section…"
+                className="w-full border border-rule bg-ink px-3 py-2 text-sm text-paper outline-none placeholder:text-muted/50 focus:border-amber"
+              />
             </label>
-          ) : (
-            <div className="space-y-4">
-              <label className="block space-y-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
-                  Full name
-                </span>
-                <input
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Maria Santos"
-                  className="w-full border border-rule bg-ink px-3 py-2 text-sm text-paper outline-none placeholder:text-muted/50 focus:border-amber"
-                />
-              </label>
-              <label className="block space-y-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
-                  Student number <span className="normal-case tracking-normal">(optional)</span>
-                </span>
-                <input
-                  value={studentNo}
-                  onChange={(e) => setStudentNo(e.target.value)}
-                  placeholder="S-1010"
-                  className="w-full border border-rule bg-ink px-3 py-2 font-mono text-sm text-paper outline-none placeholder:text-muted/50 focus:border-amber"
-                />
-              </label>
-            </div>
-          )}
+
+            <ul className="max-h-[220px] divide-y divide-rule-soft overflow-y-auto border border-rule">
+              {matches.length === 0 && (
+                <li className="px-4 py-6 text-center font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+                  {(data?.students.length ?? 0) === 0
+                    ? "No students enrolled this school year"
+                    : "No match"}
+                </li>
+              )}
+              {matches.map((s) => {
+                const active = s.id === studentId;
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => setStudentId(active ? "" : s.id)}
+                      className={`flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors ${
+                        active ? "bg-amber/10" : "hover:bg-surface-2"
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span
+                          className={`block truncate text-sm ${
+                            active ? "text-amber" : "text-paper"
+                          }`}
+                        >
+                          {s.name}
+                        </span>
+                        <span className="block font-mono text-[10px] tracking-wider text-muted">
+                          {[s.studentNo, classOf(s)].filter(Boolean).join(" · ") || "—"}
+                        </span>
+                      </span>
+                      {s.cards.length > 0 && (
+                        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
+                          holds {s.cards.length}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {/* The gate binds plastic to people; it does not invent people. A
+                student created here would have no enrolment, so no school year,
+                no section and no student number — invisible in PTA Collections. */}
+            <p className="font-mono text-[10px] leading-relaxed tracking-wider text-muted">
+              Student not listed? Add them in PTA Collections. This board shows
+              the roster for the active school year and does not create students.
+            </p>
+          </div>
 
           <button
             type="button"
@@ -293,7 +313,7 @@ export function EnrollPanel() {
         {/* ---- Who holds what --------------------------------------------- */}
         <header className="border-y border-rule px-5 py-3">
           <h2 className="font-mono text-[11px] uppercase tracking-[0.28em] text-paper">
-            Enrolled
+            Cards issued
           </h2>
         </header>
         <ul className="max-h-[300px] divide-y divide-rule-soft overflow-y-auto">
@@ -302,7 +322,7 @@ export function EnrollPanel() {
               <div className="min-w-0">
                 <div className="truncate text-sm text-paper">{s.name}</div>
                 <div className="font-mono text-[10px] tracking-wider text-muted">
-                  {s.studentNo ?? "—"}
+                  {[s.studentNo, classOf(s)].filter(Boolean).join(" · ") || "—"}
                 </div>
               </div>
               <div className="flex shrink-0 flex-wrap justify-end gap-1.5">

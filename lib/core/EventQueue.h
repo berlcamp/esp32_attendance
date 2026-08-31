@@ -46,11 +46,17 @@ class EventQueue {
 
   size_t pending() const { return pending_; }
   size_t cursor() const { return cursor_; }
+  // Bytes actually on disk. Exposed so the firmware can log what it recovered
+  // and make a queue that vanished across a reboot visible instead of silent.
+  size_t dataBytes() { return st_.size(cfg_.dataPath); }
   bool full() const { return pending_ >= cfg_.maxEvents; }
 
  private:
   bool persistCursor();
   bool compact();
+  // Recount unsent lines straight from the file. The counter is a cache; the
+  // file is the truth, and they must never be allowed to disagree.
+  void recount();
 
   Storage& st_;
   QueueConfig cfg_;

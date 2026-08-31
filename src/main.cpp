@@ -56,6 +56,10 @@ static volatile uint32_t g_failed = 0;
 static volatile uint32_t g_dropped = 0;   // queue-full rejections
 static volatile uint32_t g_corrupt = 0;   // unparseable queue lines
 static volatile uint32_t g_duplicates = 0;  // re-sends the server ignored
+// Times this device has had to format its filesystem. Non-zero means queued
+// scans were discarded at some boot, which must not be inferable only from a
+// log line that has long since scrolled away.
+static uint32_t g_fsFormats = 0;
 static volatile bool g_online = false;
 
 #define LOCK_QUEUE() xSemaphoreTake(g_queueMutex, portMAX_DELAY)
@@ -247,11 +251,20 @@ static void uploaderTask(void*) {
       } else if (resp.find("PGRST202") != std::string::npos) {
         Serial.println(
             "[upload] hint: function " SUPABASE_SCHEMA "." SUPABASE_RPC
-            "() not found. Run sql/rpc.sql in the SQL editor.");
+            "() not found. Apply 0013_gate_attendance.sql in the SQL editor.");
+      } else if (resp.find("unregistered or inactive gate device") !=
+                 std::string::npos) {
+        // Not a permissions problem despite the SQLSTATE: this device is not
+        // in pta.gate_devices, so the server does not know which school its
+        // scans belong to. Refusing is deliberate — the events stay on flash.
+        Serial.println(
+            "[upload] hint: device '" DEVICE_ID "' is not registered. Add it: "
+            "insert into pta.gate_devices (device_id, school_id) values "
+            "('" DEVICE_ID "', '<school uuid>');");
       } else if (resp.find("42501") != std::string::npos) {
         Serial.println(
             "[upload] hint: anon lacks EXECUTE on " SUPABASE_RPC
-            "(). Re-run the grants at the bottom of sql/rpc.sql.");
+            "(). Re-run the grants at the bottom of 0013_gate_attendance.sql.");
       }
       if (code >= 400 && code < 500) {
         Serial.println(
@@ -269,16 +282,19 @@ static void uploaderTask(void*) {
 static void printStatus() {
   LOCK_QUEUE();
   const size_t depth = g_queue->pending();
+  const size_t bytesOnFlash = g_queue->dataBytes();
   UNLOCK_QUEUE();
   Serial.printf(
-      "[status] sim=%s wifi=%s ip=%s rssi=%d net=%s clock=%s queue=%u sent=%u "
-      "failed=%u dropped=%u dup=%u corrupt=%u heap=%uKB up=%llds\n",
+      "[status] reader=%s wifi=%s ip=%s rssi=%d net=%s clock=%s queue=%u "
+      "(%ub) sent=%u failed=%u dropped=%u dup=%u corrupt=%u fswipes=%u "
+      "heap=%uKB up=%llds\n",
       g_reader.enabled() ? "on" : "OFF",
       WiFi.status() == WL_CONNECTED ? "up" : "down",
       WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
       g_netEnabled ? "on" : "off", g_time.synced() ? "synced" : "UNSYNCED",
-      (unsigned)depth, (unsigned)g_sent, (unsigned)g_failed,
-      (unsigned)g_dropped, (unsigned)g_duplicates, (unsigned)g_corrupt,
+      (unsigned)depth, (unsigned)bytesOnFlash, (unsigned)g_sent,
+      (unsigned)g_failed, (unsigned)g_dropped, (unsigned)g_duplicates,
+      (unsigned)g_corrupt, (unsigned)g_fsFormats,
       (unsigned)(ESP.getFreeHeap() / 1024),
       (long long)TimeSync::uptimeSeconds());
 }
@@ -287,8 +303,9 @@ static void printHelp() {
   Serial.println(
       "commands:\n"
       "  status            current state\n"
-      "  sim off | stop    STOP generating scans (persists across reboot)\n"
-      "  sim on  | start   resume generating scans every 10s\n"
+      "  reader off        STOP accepting scans (persists across reboot)\n"
+      "  reader on         resume accepting scans\n"
+      "                    aliases: sim on|off, start, stop\n"
       "  net on|off        simulate internet up/down (WiFi stays connected)\n"
       "  queue depth       pending event count\n"
       "  queue dump        print up to 20 pending events\n"
@@ -307,18 +324,21 @@ static void handleCommand(std::string cmd) {
     printHelp();
   } else if (cmd == "status") {
     printStatus();
-  } else if (cmd == "sim off" || cmd == "stop") {
+  } else if (cmd == "reader off" || cmd == "sim off" || cmd == "stop") {
+    // NVS key stays "sim" so an existing device keeps its saved setting.
     g_reader.setEnabled(false);
     g_prefs.putBool("sim", false);
     Serial.println(
-        "[sim] STOPPED — no new scans are being generated. Survives reboot. "
-        "Resume with 'sim on'.");
-  } else if (cmd == "sim on" || cmd == "start") {
+        "[reader] STOPPED — no scans are accepted, from a real card or the "
+        "simulator. Survives reboot. Resume with 'reader on'.");
+  } else if (cmd == "reader on" || cmd == "sim on" || cmd == "start") {
     g_reader.setEnabled(true);
     g_prefs.putBool("sim", true);
-    Serial.println("[sim] RUNNING — one scan every 10s.");
-  } else if (cmd == "sim") {
-    Serial.printf("[sim] %s\n", g_reader.enabled() ? "running" : "stopped");
+    Serial.printf("[reader] RUNNING — %s\n",
+                  USE_WIEGAND_READER ? "waiting for cards"
+                                     : "one simulated scan every 10s");
+  } else if (cmd == "reader" || cmd == "sim") {
+    Serial.printf("[reader] %s\n", g_reader.enabled() ? "running" : "stopped");
   } else if (cmd == "net off") {
     g_netEnabled = false;
     Serial.println("[net] OFF — scans will queue to flash");
@@ -378,10 +398,30 @@ void setup() {
                 (unsigned)(ESP.getFlashChipSize() / (1024 * 1024)),
                 (unsigned)(ESP.getPsramSize() / 1024));
 
-  if (!LittleFS.begin(true)) {
-    Serial.println("[fs] FATAL: LittleFS mount failed");
-    delay(5000);
-    ESP.restart();
+  // NOT begin(true). formatOnFail wipes the pending queue without a word,
+  // so a filesystem hiccup looks identical to "there was nothing queued" —
+  // which is how a backlog can vanish unnoticed. A gate still has to come up,
+  // so we do format, but only after saying so, and the count is persisted so
+  // the loss stays visible in `status` long after the boot log has scrolled.
+  if (!LittleFS.begin(false)) {
+    g_fsFormats = g_prefs.getUInt("fsfmt", 0) + 1;
+    g_prefs.putUInt("fsfmt", g_fsFormats);
+    // A first boot on a virgin partition lands here too, where nothing is
+    // lost. We cannot tell that apart from corruption, so say what is true of
+    // both rather than crying wolf or under-reporting a real wipe.
+    Serial.println(
+        "[fs] *** MOUNT FAILED. Anything queued on flash is unreadable and "
+        "will be discarded. On a first boot that is nothing; otherwise it is "
+        "your pending scans. ***");
+    Serial.printf("[fs] *** formatting (this is wipe #%u on this device) ***\n",
+                  (unsigned)g_fsFormats);
+    if (!LittleFS.begin(true)) {
+      Serial.println("[fs] FATAL: format failed too");
+      delay(5000);
+      ESP.restart();
+    }
+  } else {
+    g_fsFormats = g_prefs.getUInt("fsfmt", 0);
   }
   Serial.printf("[fs] littlefs %uKB used of %uKB\n",
                 (unsigned)(LittleFS.usedBytes() / 1024),
@@ -395,15 +435,17 @@ void setup() {
   static core::EventQueue queue(g_storage, qcfg);
   g_queue = &queue;
   g_queue->begin();
-  Serial.printf("[queue] recovered %u pending event(s) from flash\n",
-                (unsigned)g_queue->pending());
+  Serial.printf(
+      "[queue] recovered %u pending event(s), %u byte(s) on flash, cursor=%u\n",
+      (unsigned)g_queue->pending(), (unsigned)g_queue->dataBytes(),
+      (unsigned)g_queue->cursor());
 
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
   esp_task_wdt_add(NULL);
 
   const bool simOn = g_prefs.getBool("sim", true);
   g_reader.setEnabled(simOn);
-  Serial.printf("[reader] %s (change with 'sim on' / 'sim off')\n",
+  Serial.printf("[reader] %s (change with 'reader on' / 'reader off')\n",
                 simOn ? (USE_WIEGAND_READER ? "LIVE — waiting for cards"
                                            : "SIMULATED — one scan every 10s")
                       : "STOPPED — no scans accepted");

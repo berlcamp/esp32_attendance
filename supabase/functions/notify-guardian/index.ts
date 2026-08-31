@@ -9,7 +9,8 @@
 // would contain that, the way RLS contains the anon key.
 //
 // Two entry points, same body:
-//   - a Supabase Database Webhook on INSERT into mvts_esp32.attendance
+//   - the pg_net trigger on INSERT into pta.attendance (sql/webhook.sql), or
+//     an equivalent Supabase Database Webhook
 //   - {"mode":"retry"} from pg_cron, to sweep up rows this function claimed
 //     and then died before sending
 //
@@ -30,7 +31,7 @@ const GAP_MS = Number(Deno.env.get("SEND_GAP_MS") ?? "60");
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  { db: { schema: "mvts_esp32" }, auth: { persistSession: false } },
+  { db: { schema: "pta" }, auth: { persistSession: false } },
 );
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

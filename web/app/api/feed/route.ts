@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
-import { serverClient, type FeedRow } from "@/lib/supabase";
+import {
+  serverClient,
+  gateSchool,
+  GATE_DEVICE_ID,
+  type FeedRow,
+  type RosterRow,
+} from "@/lib/supabase";
 import { startOfSchoolDay, SCHOOL_TZ } from "@/lib/tz";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-type Student = { id: string; full_name: string; student_no: string | null };
 
 // Shared envelope so every response — success or failure — has the same shape.
 const EMPTY = {
@@ -14,7 +18,8 @@ const EMPTY = {
   hint: null as string | null,
   now: new Date(0).toISOString(),
   tz: SCHOOL_TZ,
-  gate: { deviceId: "gate-01", lastSeen: null, secondsSince: null },
+  school: null as string | null,
+  gate: { deviceId: GATE_DEVICE_ID, lastSeen: null, secondsSince: null },
   stats: {
     present: 0, enrolled: 0, scansToday: 0, unknownScans: 0,
     unknownCards: [] as string[], lateSync: 0, inferredTime: 0,
@@ -36,23 +41,39 @@ export async function GET() {
     );
   }
 
+  // Which school this gate belongs to. service_role bypasses RLS, so this is
+  // the ONLY thing keeping another school's students off this board.
+  const { school, error: schoolErr } = await gateSchool(sb);
+  if (!school) {
+    return NextResponse.json(
+      { ...EMPTY, configured: true, error: schoolErr }, { status: 200 },
+    );
+  }
+
   const dayStart = startOfSchoolDay().toISOString();
 
-  const [feedRes, todayRes, studentsRes] = await Promise.all([
+  const [feedRes, todayRes, rosterRes] = await Promise.all([
     sb.from("attendance_resolved")
-      .select("*").order("scanned_at", { ascending: false }).limit(60),
+      .select("*").eq("school_id", school.schoolId)
+      .order("scanned_at", { ascending: false }).limit(60),
     sb.from("attendance_resolved")
-      .select("*").gte("scanned_at", dayStart)
+      .select("*").eq("school_id", school.schoolId).gte("scanned_at", dayStart)
       .order("scanned_at", { ascending: true }),
-    sb.from("students").select("id, full_name, student_no").order("full_name"),
+    // The roster is PTA's, not ours: students actively enrolled in this
+    // school's active school year.
+    sb.from("gate_roster")
+      .select("student_id, full_name, student_no, grade_level, section_name")
+      .eq("school_id", school.schoolId)
+      .order("full_name"),
   ]);
 
-  const err = feedRes.error ?? todayRes.error ?? studentsRes.error;
+  const err = feedRes.error ?? todayRes.error ?? rosterRes.error;
   if (err) {
     return NextResponse.json(
       {
         ...EMPTY,
         configured: true,
+        school: school.schoolName,
         error: err.message,
         hint: (err as { hint?: string }).hint ?? null,
       },
@@ -62,7 +83,7 @@ export async function GET() {
 
   const feed = (feedRes.data ?? []) as FeedRow[];
   const today = (todayRes.data ?? []) as FeedRow[];
-  const students = (studentsRes.data ?? []) as Student[];
+  const roster = (rosterRes.data ?? []) as RosterRow[];
 
   // First scan of the day per student == arrival. With one reader at one gate
   // this is a RULE we apply, not something the hardware measured.
@@ -81,14 +102,15 @@ export async function GET() {
     error: null,
     now: new Date().toISOString(),
     tz: SCHOOL_TZ,
+    school: school.schoolName,
     gate: {
-      deviceId: last?.device_id ?? "gate-01",
+      deviceId: last?.device_id ?? GATE_DEVICE_ID,
       lastSeen: last?.received_at ?? null,
       secondsSince: last ? (Date.now() - Date.parse(last.received_at)) / 1000 : null,
     },
     stats: {
       present: firstScan.size,
-      enrolled: students.length,
+      enrolled: roster.length,
       scansToday: today.length,
       unknownScans: unknownToday.length,
       unknownCards,
@@ -96,13 +118,15 @@ export async function GET() {
       inferredTime: today.filter((r) => !r.clock_synced).length,
     },
     feed,
-    roster: students
+    roster: roster
       .map((s) => {
-        const f = firstScan.get(s.id);
+        const f = firstScan.get(s.student_id);
         return {
-          id: s.id,
+          id: s.student_id,
           name: s.full_name,
           studentNo: s.student_no,
+          gradeLevel: s.grade_level,
+          section: s.section_name,
           arrivedAt: f?.scanned_at ?? null,
           estimated: f ? !f.clock_synced : false,
           late: f ? f.queued : false,

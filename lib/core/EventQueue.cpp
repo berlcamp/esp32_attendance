@@ -30,7 +30,15 @@ bool EventQueue::begin() {
   const size_t total = st_.exists(cfg_.dataPath) ? st_.size(cfg_.dataPath) : 0;
   if (cursor_ > total) cursor_ = total;  // corrupt cursor -> replay everything
 
-  // Count unsent lines. ~20k lines is a few hundred ms at boot, once.
+  recount();
+  return true;
+}
+
+// Count unsent lines. ~20k lines is a few hundred ms at boot, once.
+void EventQueue::recount() {
+  const size_t total = st_.exists(cfg_.dataPath) ? st_.size(cfg_.dataPath) : 0;
+  if (cursor_ > total) cursor_ = total;
+
   pending_ = 0;
   size_t off = cursor_;
   std::string chunk;
@@ -42,7 +50,6 @@ bool EventQueue::begin() {
     }
     off += chunk.size();
   }
-  return true;
 }
 
 bool EventQueue::push(const std::string& line) {
@@ -79,13 +86,24 @@ bool EventQueue::commit(size_t bytesConsumed, size_t itemCount) {
   pending_ = itemCount >= pending_ ? 0 : pending_ - itemCount;
 
   const size_t total = st_.size(cfg_.dataPath);
-  if (cursor_ >= total || pending_ == 0) {
+
+  // Truncate ONLY on the file's own evidence that everything is sent. The old
+  // condition also fired on `pending_ == 0`, which throws the log away on the
+  // word of an in-memory counter — and the uploader can overstate itemCount
+  // (it passes batch.size() while some lines were unparseable), so a wrong
+  // counter silently destroyed unsent events that were still on disk.
+  if (cursor_ >= total) {
     // Fully drained: cheapest possible compaction.
     cursor_ = 0;
     pending_ = 0;
     st_.writeAll(cfg_.dataPath, std::string());
     return persistCursor();
   }
+
+  // Bytes remain past the cursor, so the counter was wrong, not the file.
+  // Believe the file.
+  if (pending_ == 0) recount();
+
   if (cursor_ >= cfg_.compactAfterBytes) return compact();
   return persistCursor();
 }

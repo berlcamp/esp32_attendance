@@ -27,7 +27,7 @@ import { esc, sendMessage } from "../_shared/telegram.ts";
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  { db: { schema: "mvts_esp32" }, auth: { persistSession: false } },
+  { db: { schema: "pta" }, auth: { persistSession: false } },
 );
 
 // Telegram sends this header on every update, matching the secret_token given
