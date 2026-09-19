@@ -191,6 +191,23 @@ a `https://t.me/<bot>?start=<token>` QR on the enrolment slip;
 `telegram-webhook` redeems it and stores the `chat_id`. Expect roughly 70% of
 parents to complete it, so plan for an unlinked-guardian list in the dashboard.
 
+**The camera is not wired up yet, and the notifier already knows it.** A scan
+with no `image_path` is sent as text — the designed path, and the only one a
+live school should see. To *preview* the photo message before the hardware
+exists, set `SAMPLE_PHOTO` to a URL Telegram can fetch, or to an object path in
+the capture bucket:
+
+```bash
+supabase secrets set SAMPLE_PHOTO="https://placehold.co/640x480.jpg?text=Gate+Camera+Sample"
+```
+
+Every photo-less scan then arrives as a picture, captioned with the same
+arrival line plus *"Sample image — the gate camera is not installed yet"*. The
+label is not optional and is not a setting: a parent opening a photo of a child
+assumes it is theirs, and an unlabelled placeholder is worse than no photo.
+Unset it (`SAMPLE_PHOTO=`) before real parents are on the bot, and delete the
+constant the day a real capture lands.
+
 **Photographs of minors are not kept forever.** Attendance rows are; captures
 are not. `notify_config.capture_retention_days` (default 30) drives
 `expired_captures()`. Collect written consent at enrolment — `/stop` in the bot

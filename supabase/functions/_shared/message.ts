@@ -43,11 +43,20 @@ function isToday(iso: string): boolean {
 }
 
 /**
+ * Said out loud whenever the attached photo is the stand-in rather than this
+ * scan's own capture. A parent who opens a photo of a child expects it to be
+ * theirs; an unlabelled placeholder is worse than no photo at all, so the
+ * label travels with the image and is never optional.
+ */
+export const SAMPLE_PHOTO_NOTE =
+  "<i>Sample image — the gate camera is not installed yet, so this is a placeholder and not a photo of your child.</i>";
+
+/**
  * Every caveat the database knows about a timestamp gets said out loud. A
  * parent who is told "7:02 AM" for a scan the device reconstructed from uptime
  * after a power cut has been told something we do not actually know.
  */
-export function caption(job: Job): string {
+export function caption(job: Job, opts: { samplePhoto?: boolean } = {}): string {
   const who = esc(job.student_name ?? "A student");
   const when = clockTime(job.scanned_at);
   const day = isToday(job.scanned_at) ? "" : ` on ${esc(dayLabel(job.scanned_at))}`;
@@ -68,6 +77,8 @@ export function caption(job: Job): string {
       "<i>The gate's clock had not synced yet, so this time is approximate.</i>",
     );
   }
+
+  if (opts.samplePhoto) lines.push(SAMPLE_PHOTO_NOTE);
 
   return lines.join("\n");
 }

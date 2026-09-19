@@ -27,6 +27,17 @@ const SIGNED_URL_TTL_S = Number(Deno.env.get("SIGNED_URL_TTL_S") ?? "3600");
 // Telegram throttles bursts across many chats. A morning rush is hundreds of
 // taps; pacing here is cheaper than handling 429s for all of them.
 const GAP_MS = Number(Deno.env.get("SEND_GAP_MS") ?? "60");
+// A stand-in photo for scans that carry none, so the photo message can be seen
+// and approved before the camera exists. Empty (the default) means every such
+// scan stays a text message, which is what a live school must keep getting:
+// this is opt-in per deployment, never on by accident.
+//
+//   supabase secrets set SAMPLE_PHOTO="https://placehold.co/640x480.jpg?text=Gate+Camera+Sample"
+//
+// Either an http(s) URL Telegram can fetch, or an object path inside the
+// capture bucket, which is signed exactly like a real capture would be. Delete
+// this and its three uses the day the camera lands.
+const SAMPLE_PHOTO = (Deno.env.get("SAMPLE_PHOTO") ?? "").trim();
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -63,33 +74,44 @@ async function mark(
   if (e) console.error("mark_notification failed", job.event_id, e.message);
 }
 
+/** An object path in the capture bucket becomes a URL; a URL is already one. */
+async function photoUrl(pathOrUrl: string): Promise<string | null> {
+  if (/^https?:\/\//.test(pathOrUrl)) return pathOrUrl;
+
+  // A signed URL only has to outlive the sendPhoto call: Telegram fetches
+  // the JPEG once and serves its own copy from then on.
+  const { data, error } = await db.storage
+    .from(BUCKET)
+    .createSignedUrl(pathOrUrl, SIGNED_URL_TTL_S);
+
+  if (error || !data?.signedUrl) {
+    console.warn("sign failed", pathOrUrl, error?.message);
+    return null;
+  }
+  return data.signedUrl;
+}
+
 async function deliver(job: Job): Promise<"sent" | "failed"> {
-  const text = caption(job);
+  const sample = !job.image_path && SAMPLE_PHOTO !== "";
+  const source = job.image_path ?? (sample ? SAMPLE_PHOTO : null);
+  // The label is part of the photo, so it goes on whichever message carries it
+  // and comes off again on any fallback to text.
+  const text = caption(job, { samplePhoto: sample });
   let result;
 
-  if (job.image_path) {
-    // A signed URL only has to outlive the sendPhoto call: Telegram fetches
-    // the JPEG once and serves its own copy from then on.
-    const { data, error } = await db.storage
-      .from(BUCKET)
-      .createSignedUrl(job.image_path, SIGNED_URL_TTL_S);
-
-    if (error || !data?.signedUrl) {
-      // The photo is corroboration, not the record. Losing it must never cost
-      // the parent the notification itself.
-      console.warn("sign failed, sending text only", job.image_path, error?.message);
-      result = await sendMessage(job.chat_id, text);
-    } else {
-      result = await sendPhoto(job.chat_id, data.signedUrl, text);
-      if (!result.ok && !result.blocked) {
-        // Telegram could not fetch the URL, or the image was rejected. The
-        // arrival still needs reporting.
-        console.warn("sendPhoto failed, falling back to text", result.error);
-        result = await sendMessage(job.chat_id, text);
-      }
+  const url = source ? await photoUrl(source) : null;
+  if (url) {
+    result = await sendPhoto(job.chat_id, url, text);
+    if (!result.ok && !result.blocked) {
+      // Telegram could not fetch the URL, or the image was rejected. The
+      // arrival still needs reporting.
+      console.warn("sendPhoto failed, falling back to text", result.error);
+      result = await sendMessage(job.chat_id, caption(job));
     }
   } else {
-    result = await sendMessage(job.chat_id, text);
+    // The photo is corroboration, not the record. Losing it must never cost
+    // the parent the notification itself.
+    result = await sendMessage(job.chat_id, caption(job));
   }
 
   if (result.ok) {
