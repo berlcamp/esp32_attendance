@@ -313,6 +313,7 @@ static void printHelp() {
       "  scan <uid>        inject one scan\n"
       "  burst <n>         inject n scans (catch-up test)\n"
       "  wifi              reconnect WiFi\n"
+      "  wifi scan         list nearby 2.4GHz networks (SSID bytes in hex)\n"
       "  reboot            restart the device");
 }
 
@@ -369,6 +370,38 @@ static void handleCommand(std::string cmd) {
     const int n = atoi(cmd.substr(6).c_str());
     g_reader.injectBurst(n > 0 ? n : 0);
     Serial.printf("[scan] injected burst of %d\n", n);
+  } else if (cmd == "wifi scan") {
+    // The S3 radio is 2.4GHz only, so this list *is* what the device can join.
+    // SSIDs print with their bytes because a curly apostrophe from an iPhone
+    // name looks identical to a straight one in secrets.h and never matches.
+    Serial.printf("[wifi] radio mac=%s status=%d, scanning...\n",
+                  WiFi.macAddress().c_str(), (int)WiFi.status());
+    // A failing WiFi.begin() leaves the radio in a permanent internal scan for
+    // the configured SSID, and that rejects ours with WIFI_SCAN_FAILED. Drop
+    // the connect attempt first, then restore it below.
+    WiFi.disconnect(false, true);
+    delay(200);
+    const int n = WiFi.scanNetworks(false, true);
+    if (n == WIFI_SCAN_FAILED) {
+      Serial.println("[wifi] scan FAILED (-2) — radio did not start");
+    } else if (n == WIFI_SCAN_RUNNING) {
+      Serial.println("[wifi] scan still running (-1)");
+    } else if (n == 0) {
+      Serial.println("[wifi] 0 networks in range — check the antenna");
+    } else {
+      Serial.printf("[wifi] %d network(s), looking for \"%s\"\n", n, WIFI_SSID);
+      for (int i = 0; i < n; i++) {
+        const String ssid = WiFi.SSID(i);
+        Serial.printf("  %-32s ch=%-3d rssi=%-4d enc=%d %s bytes=", ssid.c_str(),
+                      WiFi.channel(i), WiFi.RSSI(i), (int)WiFi.encryptionType(i),
+                      ssid == WIFI_SSID ? "<== MATCH" : "         ");
+        for (size_t b = 0; b < ssid.length(); b++)
+          Serial.printf("%02x ", (uint8_t)ssid[b]);
+        Serial.println();
+      }
+    }
+    WiFi.scanDelete();
+    wifiConnect();
   } else if (cmd == "wifi") {
     wifiConnect();
     Serial.println("[wifi] reconnecting");
