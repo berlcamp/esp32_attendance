@@ -83,6 +83,15 @@ test('REVIEW FOCUS: a failing database still shows the student and never throws'
   assert.ok(logs.some((l) => l.includes('disk I/O error')));
 });
 
+test('REVIEW I1: a failing roster read shows the card as unknown, still queues, never throws', () => {
+  const { scanner, views, queued, logs } = setup({ mirror: { lookup: () => { throw new Error('disk I/O error'); } } });
+  assert.equal(scanner.handle('0002008108'), 'queued');
+  assert.equal(views[0].student, null);
+  assert.equal(queued.length, 1);
+  assert.equal(scanner.failures, 1);
+  assert.ok(logs.some((l) => l.includes('could not look up') && l.includes('disk I/O error')), logs.join('\n'));
+});
+
 test('a full queue is reported as dropped, after the screen updated', () => {
   const { scanner, views } = setup({ queue: { enqueue: () => false } });
   assert.equal(scanner.handle('0002008108'), 'dropped');

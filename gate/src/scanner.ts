@@ -50,7 +50,15 @@ export class Scanner {
     }
 
     const at = new Date(d.now()).toISOString();
-    const student = d.mirror.lookup(uid);
+    // A failed read must not cost the scan: show it as unknown and queue it;
+    // the server still resolves who it was.
+    let student: Student | null = null;
+    try {
+      student = d.mirror.lookup(uid);
+    } catch (err) {
+      this.failures++;
+      d.log(`[scan] *** could not look up ${uid}: ${err instanceof Error ? err.message : String(err)} ***`);
+    }
     d.show({ uid, at, student });
     if (!student) d.unknownCard();
 

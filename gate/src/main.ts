@@ -59,7 +59,21 @@ const state = (): GateState => ({
   netOn: uploader.netOn,
   uploadOk: uploader.lastOk,
 });
-const pushState = (): void => hub.broadcast({ type: 'state', state: state() });
+// Every event source (reader callback, timers, background promises) goes
+// through this: a SQLite or I/O error is logged, never allowed to kill the
+// process -- a crash here would repeat on every restart.
+const guard = (where: string, fn: () => void): void => {
+  try {
+    fn();
+  } catch (err) {
+    log(`[sys] error in ${where}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+};
+const pushState = (): void => guard('state', () => hub.broadcast({ type: 'state', state: state() }));
+const syncRoster = (): void => {
+  roster.sync().then(pushState, (err: unknown) => log(`[roster] error: ${String(err)}`));
+};
+process.on('unhandledRejection', (err) => log(`[sys] unhandled rejection: ${String(err)}`));
 
 const scanner = new Scanner({
   deviceId: config.deviceId,
@@ -75,7 +89,7 @@ const scanner = new Scanner({
 });
 
 reader.onCard((uid) => {
-  scanner.handle(uid);
+  guard('scan', () => scanner.handle(uid));
   pushState();
 });
 reader.onStatus(pushState);
@@ -141,15 +155,15 @@ log(
     `db=${config.dbPath} pending=${queue.depth()} reader_enabled=${reader.enabled}`,
 );
 reader.start();
-prune();
-void roster.sync().then(pushState);
+guard('prune', prune);
+syncRoster();
 void uploader.run();
 
 const timers = [
-  setInterval(() => void roster.sync().then(pushState), ROSTER_SYNC_EVERY_MS),
+  setInterval(syncRoster, ROSTER_SYNC_EVERY_MS),
   setInterval(pushState, STATE_EVERY_MS),
-  setInterval(prune, PRUNE_EVERY_MS),
-  setInterval(() => log(`[status] ${JSON.stringify(control.status())}`), STATUS_LOG_EVERY_MS),
+  setInterval(() => guard('prune', prune), PRUNE_EVERY_MS),
+  setInterval(() => guard('status', () => log(`[status] ${JSON.stringify(control.status())}`)), STATUS_LOG_EVERY_MS),
 ];
 
 function shutdown(signal: string): void {

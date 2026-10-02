@@ -33,14 +33,26 @@ prev=$(readlink /opt/gate/current || true)
 switch() { ln -sfn "$1" /opt/gate/current.new && mv -T /opt/gate/current.new /opt/gate/current; }
 switch "/opt/gate/releases/$v"
 sudo systemctl restart gate-scanner
-sleep 3
-if ! systemctl is-active --quiet gate-scanner; then
-  echo "gate-scanner did not start on $v:"
+# "active" alone proves nothing: Restart=always brings a crash-looping
+# release back to active every 2 s. Healthy means the service itself reports
+# THIS version and has stayed up for 10 s.
+healthy() {
+  curl -sf --max-time 2 http://127.0.0.1:8080/control/status | node -e '
+    let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      try { const j = JSON.parse(s); process.exit(j.version === process.argv[1] && j.uptimeS >= 10 ? 0 : 1); }
+      catch { process.exit(1); }
+    });' "$v"
+}
+sleep 15
+if ! healthy; then
+  echo "gate-scanner is not healthy on $v:"
   journalctl -u gate-scanner -n 30 --no-pager || true
   if [[ -n "$prev" ]]; then
     switch "$prev"
     sudo systemctl restart gate-scanner
-    echo "rolled back to $(basename "$prev")"
+    # Delete the failed release, or rollback.sh would pick it as "previous".
+    if [[ "$prev" != "/opt/gate/releases/$v" ]]; then rm -rf -- "/opt/gate/releases/$v"; fi
+    echo "rolled back to $(basename "$prev") and removed $v"
   fi
   exit 1
 fi

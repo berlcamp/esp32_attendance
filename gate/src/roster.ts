@@ -34,17 +34,24 @@ export class RosterMirror {
 
   // Wholesale, in one transaction: a few thousand rows, so diffing would be
   // complexity for nothing, and a reader never sees half a roster.
+  // The server's data is not ours to trust: a student listed twice (two
+  // enrolments) keeps the last row, and a row with no id or name is skipped.
+  // One bad row must never stop the whole school from loading.
   replace(snap: Snapshot, syncedAt: string): void {
     tx(this.#db, () => {
       this.#db.exec('delete from cards; delete from roster;');
       const student = this.#db.prepare(
-        'insert into roster (student_id, full_name, student_no, grade_level, section_name) values (?, ?, ?, ?, ?)',
+        'insert or replace into roster (student_id, full_name, student_no, grade_level, section_name) values (?, ?, ?, ?, ?)',
       );
       for (const s of snap.students) {
+        if (!s?.student_id || !s.full_name) continue;
         student.run(s.student_id, s.full_name, s.student_no ?? null, s.grade_level ?? null, s.section_name ?? null);
       }
       const card = this.#db.prepare('insert or replace into cards (card_uid, student_id) values (?, ?)');
-      for (const c of snap.cards) card.run(c.card_uid, c.student_id);
+      for (const c of snap.cards) {
+        if (!c?.card_uid || !c.student_id) continue;
+        card.run(c.card_uid, c.student_id);
+      }
       setMeta(this.#db, 'roster_synced_at', syncedAt);
     });
   }
@@ -129,17 +136,25 @@ export class RosterSync {
       return 'failed';
     }
 
-    const have = this.#mirror.studentCount();
-    if (snap.students.length === 0 && have > 0) {
-      this.#log(
-        `[roster] snapshot has NO students but the mirror has ${have}; refusing to blank the screen. ` +
-          "Check the school's active school year in PTA Collections.",
-      );
-      return 'refused-empty';
+    // Storage failures (disk full, I/O error) degrade to "keep the last good
+    // mirror" exactly like a network failure -- they must never reject, or the
+    // unhandled rejection kills the service and every restart repeats it.
+    try {
+      const have = this.#mirror.studentCount();
+      if (snap.students.length === 0 && have > 0) {
+        this.#log(
+          `[roster] snapshot has NO students but the mirror has ${have}; refusing to blank the screen. ` +
+            "Check the school's active school year in PTA Collections.",
+        );
+        return 'refused-empty';
+      }
+      this.#mirror.replace(snap, new Date(nowMs).toISOString());
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      this.#log(`[roster] sync FAILED: could not store snapshot (${why}) -- keeping the last good mirror`);
+      return 'failed';
     }
-
-    this.#mirror.replace(snap, new Date(nowMs).toISOString());
-    this.#log(`[roster] synced ${snap.students.length} students, ${snap.cards.length} cards`);
+    this.#log(`[roster] synced ${this.#mirror.studentCount()} students, ${snap.cards.length} cards`);
     return 'ok';
   }
 }

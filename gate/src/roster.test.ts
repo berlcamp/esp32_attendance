@@ -98,6 +98,39 @@ test('REVIEW FOCUS: an empty snapshot never blanks a populated mirror', async ()
   assert.ok(logs.some((l) => l.includes('active school year')));
 });
 
+test('REVIEW C1: a student listed twice (two enrolments) is stored once, not a crash', async () => {
+  const twice = { ...SNAP, students: [...SNAP.students, { ...SNAP.students[0], section_name: 'Bonifacio' }] };
+  const { mirror, sync } = setup([{ status: 200, body: JSON.stringify(twice) }]);
+  assert.equal(await sync.sync(NOW), 'ok');
+  assert.equal(mirror.studentCount(), 2);
+  assert.equal(mirror.lookup('0002008108')?.full_name, 'Dela Cruz, Juan');
+});
+
+test('REVIEW C1: rows without an id or a name are skipped, not a crash', async () => {
+  const bad = {
+    ...SNAP,
+    students: [...SNAP.students, { student_id: null, full_name: 'X' }, { student_id: 'st9', full_name: null }],
+    cards: [...SNAP.cards, { card_uid: '0000000009', student_id: null }],
+  };
+  const { mirror, sync } = setup([{ status: 200, body: JSON.stringify(bad) }]);
+  assert.equal(await sync.sync(NOW), 'ok');
+  assert.equal(mirror.studentCount(), 2);
+  assert.equal(mirror.lookup('0000000009'), null);
+});
+
+test('REVIEW C1: a storage failure (disk full) keeps the last good mirror and never rejects', async () => {
+  class FullDiskMirror extends RosterMirror {
+    override replace(): void {
+      throw new Error('database or disk is full');
+    }
+  }
+  const mirror = new FullDiskMirror(openDb(':memory:'));
+  const logs: string[] = [];
+  const sync = new RosterSync(mirror, async () => ({ status: 200, body: JSON.stringify(SNAP) }), 'gate-01-pc', TOKEN, (l) => logs.push(l));
+  assert.equal(await sync.sync(NOW), 'failed');
+  assert.ok(logs.some((l) => l.includes('database or disk is full') && l.includes('keeping the last good mirror')), logs.join('\n'));
+});
+
 test('an empty snapshot is accepted when there was nothing to lose', async () => {
   const { sync } = setup([{ status: 200, body: JSON.stringify(EMPTY) }]);
   assert.equal(await sync.sync(NOW), 'ok');

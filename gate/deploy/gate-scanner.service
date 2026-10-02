@@ -2,6 +2,9 @@
 Description=Gate scanner (card reader, queue, uploader, kiosk page)
 After=network-online.target
 Wants=network-online.target
+# Never give up restarting: the default start limit (5 in 10 s) would leave a
+# crash-looping gate permanently failed until someone logs in.
+StartLimitIntervalSec=0
 
 [Service]
 User=gate
