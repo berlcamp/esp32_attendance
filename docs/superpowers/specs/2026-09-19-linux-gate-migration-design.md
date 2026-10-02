@@ -38,6 +38,7 @@ under *Server-side change required* below.
 | Offline behaviour | Full details, served from a local roster mirror |
 | Language | TypeScript on Node, with `node:sqlite` |
 | Code location | A new `gate/` directory in this repo, beside `web/` and `supabase/` |
+| Packaging | Plain systemd, no Docker. Evdev hotplug, the exclusive grab and `cage`'s seat access all fight a container, and a single dependency-free JS bundle already gives most of what an image would. Revisit only for a fleet of gates |
 
 ## Non-goals
 
@@ -123,29 +124,32 @@ This is the only work outside this repo, and it blocks the display.
 ## Card identity
 
 `WiegandTagReader` strips parity from a 26-bit frame and formats the 24-bit
-body as `%06lX` - six uppercase hex digits. That string is what lives in
-`pta.student_cards` and what `/enroll` binds to students. A USB reader will
-type something else, most likely ten decimal digits followed by Enter.
+body as `%06lX` - six uppercase hex digits. That is the format of every card
+enrolled through the ESP32.
 
-`normalizeUid()` is a pure function in `reader/`, selected by config, and its
-mapping is decided by a prerequisite test rather than by guessing:
+**Prerequisite test, run 2026-10-02.** The USB reader is a Sycreader
+"SYC ID&IC USB Reader", `08ff:0009`, a standard HID boot keyboard. On the Mac:
 
-**Prerequisite test.** Plug the USB reader into the Mac, open a text editor,
-and swipe a card that is already enrolled. Compare what it types to the value
-in `pta.student_cards`. This needs no Ubuntu and no code, and it decides
-whether this is a quiet cutover or a re-enrolment of the whole school.
+- The card supplied with the reader typed `0002008108` then Enter: ten decimal
+  digits, the usual output for a 125 kHz EM4100 card.
+- An enrolled card did not register at all. The USB reader cannot read the
+  existing cards, so no `normalizeUid()` mapping can rescue them.
 
-- **If the same tag body arrives in decimal**, normalising is
-  `parseInt(d, 10).toString(16).toUpperCase().padStart(6, "0")`. Every enrolled
-  card keeps working and no database change is needed. Unit-tested on the Mac
-  against known card and number pairs.
-- **If the reader cannot read those tags at all** - a 125 kHz reader against
-  13.56 MHz cards - no function helps and every student re-enrols. The
-  machinery exists: unknown cards surface on `/enroll` as unassigned, exactly
-  as `sql/cutover.sql` step 5 describes.
+**Decision: re-enrol on new cards.** The project has not started
+implementation and only five test cards are in `pta.student_cards`, so the
+cost is buying cards, not disrupting a school. The mapping is the identity:
+the card UID is the ten digits the reader types, leading zeros kept, Enter
+stripped. That is usually the number printed on an EM card, so a guard can
+read a damaged card's number off its face.
 
-Either way this is one small tested function plus a config value. The risk is
-schedule, not design.
+`normalizeUid()` stays as a pure function in `reader/`. Its job is now only to
+accept exactly ten digits and reject anything else as a misread, so a partial
+keystroke burst never becomes attendance.
+
+Enrolment uses the existing machinery: unknown cards surface on `/enroll` as
+unassigned, exactly as `sql/cutover.sql` step 5 describes. The five
+ESP32-format rows (`E5AC02`, `EA1612`, `EFA2D2`, `F36B72`, `F5A4F2`) are
+deleted once their students hold new cards.
 
 ## Data model
 
@@ -213,8 +217,9 @@ the world like a wiring fault."
 
 `/etc/gate/gate.env`, mode 0600, root-owned, loaded by systemd's
 `EnvironmentFile=`. It replaces `include/secrets.h`. It holds the Supabase URL
-and anon key, `DEVICE_ID`, the reader device path, and the UID format selected
-by the prerequisite test.
+and anon key, `DEVICE_ID`, and the reader device path. Use the stable
+`/dev/input/by-id/usb-Sycreader_RFID_Technology_Co.__Ltd_SYC_ID_IC_USB_Reader_08FF20140315-event-kbd`
+path, not `eventN`, which can renumber on replug.
 
 ## Deployment
 
@@ -238,7 +243,8 @@ can leave the framebuffer at 640x480.
 
 ## Testing
 
-On the Mac, under `node:test`: `normalizeUid` against real card pairs, queue
+On the Mac, under `node:test`: `normalizeUid` accepting `0002008108` and
+rejecting short, long and non-digit input, queue
 enqueue/take/ack, backoff, the ten-second cooldown, roster lookup, and the SSE
 payload shape.
 
@@ -262,17 +268,21 @@ under a second, the parent's Telegram message arrives, and the row is in
 
 Each step is reversible.
 
-1. The prerequisite card-format test on the Mac. Everything downstream depends
-   on the answer.
+1. ~~The prerequisite card-format test on the Mac.~~ Done 2026-10-02: the
+   USB reader cannot read the existing cards, so students re-enrol on new
+   125 kHz cards (see *Card identity*).
 2. Apply `0025_gate_roster_snapshot.sql` through the Supabase SQL Editor.
 3. Register a second device, `gate-01-pc`, against the same school. Tenancy is
    per-device, so the mini PC is a legitimate gate the moment the row exists -
    there is no flag day.
 4. Deploy and run with `SimulatedReader`. Confirm rows land and Telegram fires
    before a real card is ever swiped.
-5. Move the physical reader across and swipe real cards at a quiet hour.
+5. Enrol the new cards through `/enroll`, then swipe them at a quiet hour.
 6. Leave the ESP32 installed and powered with `reader off` for a week. That
    setting survives reboot and reflash, so rollback is one serial command.
+   Rollback only helps if the ESP32's Wiegand reader can read the new cards,
+   so check that with one new card during step 5. If it can't, the ESP32
+   can only be a rollback for the old cards, and new cards need the mini PC.
 
 Do not run both readers against the same cards at once: two devices means two
 `event_id`s and two attendance rows for one child.
@@ -281,7 +291,7 @@ Do not run both readers against the same cards at once: two devices means two
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| USB reader cannot read the existing cards | High | The prerequisite test, before any purchase commitment or code |
+| USB reader cannot read the existing cards | Realised | Confirmed 2026-10-02; re-enrol on new 125 kHz cards |
 | HID reader types into the focused window | High | Exclusive `EVIOCGRAB`, verified by the terminal-focus test |
 | Unclean power loss at a school gate | Medium | UPS, WAL with `synchronous=FULL`, BIOS restore on AC loss |
 | Mini PC has no VGA port | Low | Check before buying; active HDMI-to-VGA converter otherwise |
