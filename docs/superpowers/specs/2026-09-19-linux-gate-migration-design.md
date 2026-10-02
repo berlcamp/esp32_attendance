@@ -109,9 +109,19 @@ roster and the card table, which breaks that property.
 **A new `gate_roster_snapshot()` RPC** in the `pta-collections` repo, as
 `supabase/migrations/0025_gate_roster_snapshot.sql`. It returns names, student
 numbers, grade levels, sections and card UIDs for the calling device's school
-only, authorised through `pta.gate_devices` exactly as `record_attendance()`
-already is. The anon key stays SELECT-less, and a stolen mini PC leaks one
-school's roster rather than a database shared with two other apps.
+only. The anon key stays SELECT-less, and a stolen mini PC leaks one school's
+roster rather than a database shared with two other apps.
+
+It is **not** authorised the way `record_attendance()` is. A device id is a
+readable name and the anon key is the shared project's public key, so device
+id alone would hand any school's names and card numbers to anyone who guessed
+a gate's name - and 125 kHz cards clone in seconds. Instead each device gets a
+secret: an admin calls `pta.issue_gate_device_token(device_id)`, which returns
+a `gt_...` token once and stores only its SHA-256 on `gate_devices.token_hash`.
+The gate calls `gate_roster_snapshot(device_id, token)`. Reissuing rotates the
+token, which is how a stolen mini PC is shut out. `record_attendance()` keeps
+device-id-only auth for now so the ESP32 rollback keeps working; requiring the
+token there too is a follow-up once the ESP32 is retired.
 
 The rejected alternative is putting the `service_role` key on the mini PC. It
 bypasses RLS for every school in the shared project, and the box sits at a gate.
@@ -217,7 +227,8 @@ the world like a wiring fault."
 
 `/etc/gate/gate.env`, mode 0600, root-owned, loaded by systemd's
 `EnvironmentFile=`. It replaces `include/secrets.h`. It holds the Supabase URL
-and anon key, `DEVICE_ID`, and the reader device path. Use the stable
+and anon key, `DEVICE_ID`, `GATE_TOKEN` (from `issue_gate_device_token()`),
+and the reader device path. Use the stable
 `/dev/input/by-id/usb-Sycreader_RFID_Technology_Co.__Ltd_SYC_ID_IC_USB_Reader_08FF20140315-event-kbd`
 path, not `eventN`, which can renumber on replug.
 
