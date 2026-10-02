@@ -1,7 +1,7 @@
 # Moving the gate from an ESP32 to a Linux mini PC
 
 **Date:** 2026-09-19
-**Status:** Approved, not yet implemented
+**Status:** Approved; implementation plan in `docs/superpowers/plans/2026-10-02-linux-gate.md`
 
 ## Why
 

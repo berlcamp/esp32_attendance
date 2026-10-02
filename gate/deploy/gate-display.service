@@ -1,0 +1,27 @@
+[Unit]
+Description=Gate display (cage + Chrome kiosk)
+After=gate-scanner.service systemd-user-sessions.service getty@tty1.service
+Wants=gate-scanner.service
+Conflicts=getty@tty1.service
+
+[Service]
+User=kiosk
+PAMName=cage
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+# Wait up to a minute for the page; if it is not there the page itself shows
+# "Scanner service not responding" and reconnects, so start anyway.
+ExecStartPre=-/usr/bin/timeout 60 /bin/sh -c 'until curl -sf -o /dev/null http://127.0.0.1:8080/; do sleep 1; done'
+ExecStart=/usr/bin/cage -s -- /usr/bin/google-chrome --kiosk --ozone-platform=wayland --no-first-run --noerrdialogs --disable-infobars --disable-session-crashed-bubble --disable-features=Translate --password-store=basic --user-data-dir=/home/kiosk/.config/gate-chrome http://127.0.0.1:8080/
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Gate scanner (card reader, queue, uploader, kiosk page)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=gate
+Group=gate
+SupplementaryGroups=input
+EnvironmentFile=/etc/gate/gate.env
+Environment=DB_PATH=/var/lib/gate/gate.db
+StateDirectory=gate
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /opt/gate/current/gate.mjs
+Restart=always
+RestartSec=2
+# 78 = bad configuration (EX_CONFIG). Restarting will not fix it.
+RestartPreventExitStatus=78
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
