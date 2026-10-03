@@ -36,12 +36,12 @@ test('the screen starts on the default message', () => {
   assert.equal(text('name'), '');
 });
 
-test('a tap shows the student, and 5 minutes later the default message returns', () => {
+test('a tap shows the student, and 1 minute later the default message returns', () => {
   const { send, text, timers } = loadPage();
   send({ type: 'scan', uid: '0002008108', at: ago(0), student: JUAN });
   assert.equal(text('name'), 'Dela Cruz, Juan');
   const idle = timers.at(-1)!;
-  assert.ok(idle.ms > 299_000 && idle.ms <= 300_000, `idle timer ${idle.ms} ms`);
+  assert.ok(idle.ms > 59_000 && idle.ms <= 60_000, `idle timer ${idle.ms} ms`);
   idle.fn();
   assert.equal(text('status'), 'Please tap your card');
   assert.equal(text('name'), '');
@@ -49,7 +49,7 @@ test('a tap shows the student, and 5 minutes later the default message returns',
   assert.equal(text('meta'), '');
 });
 
-test('a new tap restarts the 5 minutes, so an earlier timer cannot clear it', () => {
+test('a new tap restarts the 1 minute, so an earlier timer cannot clear it', () => {
   const { send, text, timers } = loadPage();
   send({ type: 'scan', uid: '0002008108', at: ago(0), student: JUAN });
   const first = timers.at(-1)!;
@@ -58,9 +58,9 @@ test('a new tap restarts the 5 minutes, so an earlier timer cannot clear it', ()
   assert.equal(text('status'), 'Unknown card');
 });
 
-test('a tap older than 5 minutes (replayed after a browser restart) is not shown', () => {
+test('a tap older than 1 minute (replayed after a browser restart) is not shown', () => {
   const { send, text } = loadPage();
-  send({ type: 'scan', uid: '0002008108', at: ago(6 * 60_000), student: JUAN });
+  send({ type: 'scan', uid: '0002008108', at: ago(2 * 60_000), student: JUAN });
   assert.equal(text('status'), 'Please tap your card');
   assert.equal(text('name'), '');
 });

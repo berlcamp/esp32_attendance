@@ -39,9 +39,9 @@ const $ = (id) => document.getElementById(id);
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 let state = null;
 let connected = false;
-// A tap stays on screen this long, then the default message returns, so a
+// A tap stays on screen for one minute, then the default message returns, so a
 // student is never greeted with someone else's name from minutes ago.
-const IDLE_MS = 5 * 60 * 1000;
+const IDLE_MS = 60 * 1000;
 let idleTimer = null;
 
 function renderIdle() {
