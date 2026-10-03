@@ -28,7 +28,7 @@ export const PAGE_HTML = String.raw`<!doctype html>
 <body>
 <div id="banners"></div>
 <main>
-  <div id="status">Waiting for a card</div>
+  <div id="status">Please tap your card</div>
   <div id="name"></div>
   <div id="details"></div>
   <div id="meta"></div>
@@ -39,8 +39,26 @@ const $ = (id) => document.getElementById(id);
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 let state = null;
 let connected = false;
+// A tap stays on screen this long, then the default message returns, so a
+// student is never greeted with someone else's name from minutes ago.
+const IDLE_MS = 5 * 60 * 1000;
+let idleTimer = null;
+
+function renderIdle() {
+  $('status').className = '';
+  $('status').textContent = 'Please tap your card';
+  $('name').textContent = '';
+  $('details').textContent = '';
+  $('meta').textContent = '';
+}
 
 function renderScan(e) {
+  clearTimeout(idleTimer);
+  // Measured from the tap itself, so a tap replayed after a browser restart
+  // only shows if it is still recent.
+  const age = Math.max(Date.now() - new Date(e.at).getTime(), 0);
+  if (age >= IDLE_MS) { renderIdle(); return; }
+  idleTimer = setTimeout(renderIdle, IDLE_MS - age);
   const s = e.student;
   $('status').className = s ? 'known' : 'unknown';
   $('status').textContent = s ? 'Welcome' : 'Unknown card';
@@ -87,6 +105,7 @@ events.onmessage = (m) => {
     renderBanners();
   }
 };
+renderIdle();
 renderBanners();
 </script>
 </body>
