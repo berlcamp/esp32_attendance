@@ -20,11 +20,12 @@ function loadPage() {
     location: { reload: () => {} },
     setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: (id: number) => { if (timers[id - 1]) timers[id - 1].fn = () => {}; },
+    setInterval: () => 0,
     Date,
   });
   const send = (e: unknown) => source!.onmessage({ data: JSON.stringify(e) });
   const text = (id: string) => el(id).textContent;
-  return { send, text, timers };
+  return { send, text, timers, el };
 }
 
 const JUAN = { student_id: 'st1', full_name: 'Dela Cruz, Juan', student_no: '2026-0001', grade_level: 'Grade 7', section_name: 'Rizal' };
@@ -37,9 +38,11 @@ test('the screen starts on the default message', () => {
 });
 
 test('a tap shows the student, and 1 minute later the default message returns', () => {
-  const { send, text, timers } = loadPage();
+  const { send, text, timers, el } = loadPage();
   send({ type: 'scan', uid: '0002008108', at: ago(0), student: JUAN });
   assert.equal(text('name'), 'Dela Cruz, Juan');
+  assert.equal(text('initials'), 'JD');
+  assert.equal(el('card').className, 'known');
   const idle = timers.at(-1)!;
   assert.ok(idle.ms > 59_000 && idle.ms <= 60_000, `idle timer ${idle.ms} ms`);
   idle.fn();
@@ -47,6 +50,8 @@ test('a tap shows the student, and 1 minute later the default message returns', 
   assert.equal(text('name'), '');
   assert.equal(text('details'), '');
   assert.equal(text('meta'), '');
+  assert.equal(text('initials'), '');
+  assert.equal(el('card').className, 'idle');
 });
 
 test('a new tap restarts the 1 minute, so an earlier timer cannot clear it', () => {

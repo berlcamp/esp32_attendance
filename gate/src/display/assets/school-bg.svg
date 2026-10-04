@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMax slice">
+  <!-- Sample school backdrop for the kiosk: dusk sky, a two-storey school with
+       a gabled entrance, a flagpole and trees. Swap in a real campus photo as
+       school-bg.jpg when the school has one. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1730"/>
+      <stop offset=".55" stop-color="#2a1f45"/>
+      <stop offset=".85" stop-color="#6b2a3a"/>
+      <stop offset="1" stop-color="#a8473f"/>
+    </linearGradient>
+    <radialGradient id="sun" cx=".72" cy=".78" r=".35">
+      <stop offset="0" stop-color="#ffb26b" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#ffb26b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2f3d"/>
+      <stop offset="1" stop-color="#1a1d27"/>
+    </linearGradient>
+    <linearGradient id="roof" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7a2020"/>
+      <stop offset="1" stop-color="#4d1414"/>
+    </linearGradient>
+    <linearGradient id="lit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd58a"/>
+      <stop offset="1" stop-color="#e89b4a"/>
+    </linearGradient>
+    <pattern id="win" width="90" height="120" patternUnits="userSpaceOnUse">
+      <rect x="18" y="22" width="54" height="70" rx="3" fill="#141722"/>
+      <rect x="22" y="26" width="46" height="62" fill="#252a3a"/>
+      <line x1="45" y1="26" x2="45" y2="88" stroke="#141722" stroke-width="3"/>
+    </pattern>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <rect width="1920" height="1080" fill="url(#sun)"/>
+
+  <!-- distant hills -->
+  <path d="M0 820 C240 760 420 790 620 770 S1040 720 1280 760 S1700 730 1920 770 V1080 H0Z" fill="#1d1830"/>
+
+  <!-- left wing -->
+  <rect x="300" y="610" width="560" height="300" fill="url(#wall)"/>
+  <rect x="300" y="610" width="560" height="240" fill="url(#win)"/>
+  <path d="M280 615 L880 615 L860 585 L300 585Z" fill="url(#roof)"/>
+  <rect x="300" y="728" width="560" height="6" fill="#141722"/>
+
+  <!-- right wing -->
+  <rect x="1240" y="610" width="560" height="300" fill="url(#wall)"/>
+  <rect x="1240" y="610" width="560" height="240" fill="url(#win)"/>
+  <path d="M1220 615 L1820 615 L1800 585 L1240 585Z" fill="url(#roof)"/>
+  <rect x="1240" y="728" width="560" height="6" fill="#141722"/>
+
+  <!-- a few lit classrooms -->
+  <g fill="url(#lit)" opacity=".9">
+    <rect x="412" y="636" width="46" height="62"/>
+    <rect x="682" y="756" width="46" height="62"/>
+    <rect x="1352" y="756" width="46" height="62"/>
+    <rect x="1622" y="636" width="46" height="62"/>
+    <rect x="1712" y="756" width="46" height="62"/>
+  </g>
+
+  <!-- central entrance block -->
+  <rect x="860" y="540" width="380" height="370" fill="#2f3443"/>
+  <path d="M830 548 L1050 420 L1270 548Z" fill="url(#roof)"/>
+  <path d="M880 540 L1050 446 L1220 540Z" fill="#e8e2d6" opacity=".9"/>
+  <circle cx="1050" cy="500" r="26" fill="#b52a2a"/>
+  <circle cx="1050" cy="500" r="16" fill="#e8e2d6"/>
+  <rect x="880" y="560" width="340" height="34" fill="#e8e2d6" opacity=".85"/>
+  <g fill="#e8e2d6" opacity=".8">
+    <rect x="900" y="600" width="22" height="300"/>
+    <rect x="978" y="600" width="22" height="300"/>
+    <rect x="1100" y="600" width="22" height="300"/>
+    <rect x="1178" y="600" width="22" height="300"/>
+  </g>
+  <path d="M1010 910 V720 a40 40 0 0 1 80 0 V910Z" fill="url(#lit)" opacity=".85"/>
+  <rect x="850" y="900" width="400" height="14" fill="#3b4052"/>
+  <rect x="830" y="912" width="440" height="14" fill="#323646"/>
+
+  <!-- flagpole with the Philippine flag -->
+  <rect x="1500" y="380" width="6" height="530" fill="#c9ccd4"/>
+  <circle cx="1503" cy="378" r="7" fill="#e6c34a"/>
+  <g transform="translate(1506 392)">
+    <rect width="150" height="42" fill="#1f3fa8"/>
+    <rect y="42" width="150" height="42" fill="#c8262c"/>
+    <path d="M0 0 L72 42 L0 84Z" fill="#f4f1ea"/>
+    <circle cx="24" cy="42" r="9" fill="#e6c34a"/>
+  </g>
+
+  <!-- trees -->
+  <g fill="#0f1a17">
+    <rect x="186" y="760" width="16" height="160"/>
+    <circle cx="194" cy="740" r="78"/>
+    <circle cx="140" cy="790" r="58"/>
+    <circle cx="250" cy="785" r="62"/>
+    <rect x="1858" y="770" width="14" height="150"/>
+    <circle cx="1866" cy="750" r="70"/>
+    <circle cx="1815" cy="800" r="52"/>
+    <rect x="70" y="800" width="12" height="120"/>
+    <circle cx="76" cy="790" r="54"/>
+  </g>
+
+  <!-- ground and walkway -->
+  <rect y="910" width="1920" height="170" fill="#121318"/>
+  <path d="M990 926 L1110 926 L1260 1080 L840 1080Z" fill="#1d1f27"/>
+</svg>

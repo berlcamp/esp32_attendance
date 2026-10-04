@@ -6,12 +6,17 @@ import type { SseHub } from './sse.ts';
 
 const MAX_BODY = 10_000;
 
-// The kiosk logos. Beside this file in src/, beside gate.mjs in a release
-// (scripts/build.mjs copies them), so the same relative URL finds both.
+// The kiosk's logos and backdrop. Beside this file in src/, beside gate.mjs in
+// a release (scripts/build.mjs copies them), so the same relative URL finds both.
 const ASSETS = new URL('./assets/', import.meta.url);
-const LOGOS = ['deped-logo.png', 'school-logo.png'];
-function loadLogos(): Map<string, Buffer> {
-  return new Map(LOGOS.map((name) => [`/assets/${name}`, readFileSync(new URL(name, ASSETS))]));
+const ASSET_TYPES: Record<string, string> = {
+  'deped-logo.png': 'image/png',
+  'school-logo.png': 'image/png',
+  'school-bg.svg': 'image/svg+xml',
+};
+function loadAssets(): Map<string, { type: string; body: Buffer }> {
+  return new Map(Object.entries(ASSET_TYPES).map(([name, type]) =>
+    [`/assets/${name}`, { type, body: readFileSync(new URL(name, ASSETS)) }]));
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -33,7 +38,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown> |
 // purpose -- they are reached over SSH -- so this must never listen publicly.
 export function createGateServer(deps: { hub: SseHub; version: string; control: ControlApi }): Server {
   const page = PAGE_HTML.replaceAll('{{VERSION}}', deps.version);
-  const logos = loadLogos();
+  const assets = loadAssets();
   return createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -42,10 +47,10 @@ export function createGateServer(deps: { hub: SseHub; version: string; control: 
         res.end(page);
         return;
       }
-      const logo = req.method === 'GET' ? logos.get(url.pathname) : undefined;
-      if (logo) {
-        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
-        res.end(logo);
+      const asset = req.method === 'GET' ? assets.get(url.pathname) : undefined;
+      if (asset) {
+        res.writeHead(200, { 'Content-Type': asset.type, 'Cache-Control': 'no-cache' });
+        res.end(asset.body);
         return;
       }
       if (req.method === 'GET' && url.pathname === '/events') {

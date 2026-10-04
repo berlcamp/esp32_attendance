@@ -93,7 +93,7 @@ test('control routes answer JSON; malformed bodies are 400; unknown paths 404', 
   }
 });
 
-test('the kiosk logos are served as PNGs', async () => {
+test('the kiosk logos and backdrop are served with their types', async () => {
   const { base, close } = await start();
   try {
     for (const name of ['deped-logo.png', 'school-logo.png']) {
@@ -103,6 +103,9 @@ test('the kiosk logos are served as PNGs', async () => {
       const bytes = Buffer.from(await res.arrayBuffer());
       assert.deepEqual([...bytes.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
     }
+    const bg = await fetch(`${base}/assets/school-bg.svg`);
+    assert.equal(bg.headers.get('content-type'), 'image/svg+xml');
+    assert.match(await bg.text(), /^<svg /);
     assert.equal((await fetch(`${base}/assets/../server.ts`)).status, 404);
   } finally {
     await close();
