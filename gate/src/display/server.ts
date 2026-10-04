@@ -1,9 +1,18 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { handleControl, type ControlApi, type ControlResult } from '../control.ts';
 import { PAGE_HTML } from './page.ts';
 import type { SseHub } from './sse.ts';
 
 const MAX_BODY = 10_000;
+
+// The kiosk logos. Beside this file in src/, beside gate.mjs in a release
+// (scripts/build.mjs copies them), so the same relative URL finds both.
+const ASSETS = new URL('./assets/', import.meta.url);
+const LOGOS = ['deped-logo.png', 'school-logo.png'];
+function loadLogos(): Map<string, Buffer> {
+  return new Map(LOGOS.map((name) => [`/assets/${name}`, readFileSync(new URL(name, ASSETS))]));
+}
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | null> {
   let raw = '';
@@ -24,12 +33,19 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown> |
 // purpose -- they are reached over SSH -- so this must never listen publicly.
 export function createGateServer(deps: { hub: SseHub; version: string; control: ControlApi }): Server {
   const page = PAGE_HTML.replaceAll('{{VERSION}}', deps.version);
+  const logos = loadLogos();
   return createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://localhost');
       if (req.method === 'GET' && url.pathname === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(page);
+        return;
+      }
+      const logo = req.method === 'GET' ? logos.get(url.pathname) : undefined;
+      if (logo) {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+        res.end(logo);
         return;
       }
       if (req.method === 'GET' && url.pathname === '/events') {

@@ -92,3 +92,19 @@ test('control routes answer JSON; malformed bodies are 400; unknown paths 404', 
     await close();
   }
 });
+
+test('the kiosk logos are served as PNGs', async () => {
+  const { base, close } = await start();
+  try {
+    for (const name of ['deped-logo.png', 'school-logo.png']) {
+      const res = await fetch(`${base}/assets/${name}`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'image/png');
+      const bytes = Buffer.from(await res.arrayBuffer());
+      assert.deepEqual([...bytes.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+    }
+    assert.equal((await fetch(`${base}/assets/../server.ts`)).status, 404);
+  } finally {
+    await close();
+  }
+});

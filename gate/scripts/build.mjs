@@ -1,5 +1,6 @@
 // Bundles the service into ONE file for the mini PC: no node_modules, no
-// native modules, nothing to compile on the target. Copies deploy/ beside it.
+// native modules, nothing to compile on the target. Copies deploy/ and the
+// kiosk logos beside it.
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,5 +24,6 @@ await build({
   banner: { js: `// gate ${version}` },
 });
 cpSync('deploy', 'dist/deploy', { recursive: true });
+cpSync('src/display/assets', 'dist/assets', { recursive: true });
 writeFileSync('dist/VERSION', `${version}\n`);
 console.log(`built dist/gate.mjs (${version})`);

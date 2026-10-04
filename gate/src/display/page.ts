@@ -1,4 +1,5 @@
-// The kiosk page. Text only: name, student number, grade, section, time,
+// The kiosk page: the DepEd seal left, the school logo right, and text only for
+// the scan itself: name, student number, grade, section, time,
 // known/unknown (spec, Decisions). Rendered with textContent, never
 // innerHTML, so a student's name cannot inject markup. It reloads itself when
 // the service reports a different version, so a deploy reaches the monitor
@@ -12,11 +13,13 @@ export const PAGE_HTML = String.raw`<!doctype html>
   :root { --bg: #0b0d10; --fg: #f4f6f8; --muted: #8a94a3; --ok: #2fb36b; --bad: #e05252; --panel: #1c2128; }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; cursor: none; overflow: hidden; }
-  #banners { position: fixed; top: 0; left: 0; right: 0; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 3vh 4vw 0; }
+  header img { height: 16vh; width: auto; }
   .banner { padding: 1.2vh 3vw; font-size: 3.2vh; font-weight: 700; }
   .banner.bad { background: var(--bad); color: #fff; }
   .banner.quiet { background: var(--panel); color: var(--muted); font-weight: 500; font-size: 2.4vh; }
-  main { height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 0 6vw; }
+  main { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 6vw; }
   #status { font-size: 4vh; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
   #status.known { color: var(--ok); }
   #status.unknown { color: var(--bad); }
@@ -27,6 +30,10 @@ export const PAGE_HTML = String.raw`<!doctype html>
 </head>
 <body>
 <div id="banners"></div>
+<header>
+  <img src="/assets/deped-logo.png" alt="DepEd">
+  <img src="/assets/school-logo.png" alt="Molave Vocational Technical School">
+</header>
 <main>
   <div id="status">Please tap your card</div>
   <div id="name"></div>
