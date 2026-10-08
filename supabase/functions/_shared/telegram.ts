@@ -5,7 +5,9 @@
 const API = "https://api.telegram.org";
 
 export type SendResult =
-  | { ok: true }
+  // fileId: Telegram's id for a photo it now hosts. Sending that id again
+  // reuses its copy, with no upload at all.
+  | { ok: true; fileId?: string }
   // `blocked` means stop trying this recipient forever, not "retry later".
   | { ok: false; retryAfterS?: number; blocked: boolean; error: string };
 
@@ -33,19 +35,27 @@ const PERMANENT = [
   "peer_id_invalid",
 ];
 
-async function call(method: string, body: unknown): Promise<SendResult> {
+async function call(method: string, body: Record<string, unknown> | FormData): Promise<SendResult> {
   let res: Response;
   try {
-    res = await fetch(`${API}/bot${token()}/${method}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    res = await fetch(`${API}/bot${token()}/${method}`, body instanceof FormData
+      // multipart: fetch sets the Content-Type with its boundary itself.
+      ? { method: "POST", body }
+      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   } catch (e) {
     return { ok: false, blocked: false, error: `network: ${e}` };
   }
 
-  if (res.ok) return { ok: true };
+  if (res.ok) {
+    try {
+      // A photo comes back in several sizes; the last is the largest.
+      const sizes = (await res.json())?.result?.photo;
+      const fileId = Array.isArray(sizes) ? sizes.at(-1)?.file_id : undefined;
+      return typeof fileId === "string" ? { ok: true, fileId } : { ok: true };
+    } catch {
+      return { ok: true };
+    }
+  }
 
   const text = await res.text();
   let description = text;
@@ -75,15 +85,21 @@ export function sendMessage(chatId: string, html: string) {
 }
 
 /**
- * `photo` is a URL string, not bytes. Telegram fetches it once and re-hosts its
- * own copy, so the signed URL only has to outlive this call -- and we never
- * proxy the image through the function.
+ * `photo` is one of:
+ *  - the JPEG bytes, uploaded in this request: the fastest first send, since
+ *    Telegram does not have to turn round and fetch anything;
+ *  - a file_id from an earlier send, which reuses Telegram's own copy;
+ *  - an http(s) URL, which Telegram fetches (the sample photo).
  */
-export function sendPhoto(chatId: string, photoUrl: string, captionHtml: string) {
-  return call("sendPhoto", {
-    chat_id: chatId,
-    photo: photoUrl,
-    caption: captionHtml.slice(0, 1024), // Telegram's caption cap
-    parse_mode: "HTML",
-  });
+export function sendPhoto(chatId: string, photo: Blob | string, captionHtml: string) {
+  const caption = captionHtml.slice(0, 1024); // Telegram's caption cap
+  if (typeof photo === "string") {
+    return call("sendPhoto", { chat_id: chatId, photo, caption, parse_mode: "HTML" });
+  }
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  form.set("photo", photo, "gate.jpg");
+  form.set("caption", caption);
+  form.set("parse_mode", "HTML");
+  return call("sendPhoto", form);
 }

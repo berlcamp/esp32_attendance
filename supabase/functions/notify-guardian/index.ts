@@ -23,6 +23,8 @@ import { sendMessage, sendPhoto } from "../_shared/telegram.ts";
 import { caption, type Job } from "../_shared/message.ts";
 
 const BUCKET = Deno.env.get("CAPTURE_BUCKET") ?? "gate-captures";
+// Only for the fallback when a capture cannot be downloaded: Telegram then
+// fetches it from a signed URL, which has to outlive the sendPhoto call.
 const SIGNED_URL_TTL_S = Number(Deno.env.get("SIGNED_URL_TTL_S") ?? "3600");
 // Telegram throttles bursts across many chats. A morning rush is hundreds of
 // taps; pacing here is cheaper than handling 429s for all of them.
@@ -74,12 +76,23 @@ async function mark(
   if (e) console.error("mark_notification failed", job.event_id, e.message);
 }
 
-/** An object path in the capture bucket becomes a URL; a URL is already one. */
-async function photoUrl(pathOrUrl: string): Promise<string | null> {
+/** What sendPhoto takes: the JPEG bytes, a Telegram file_id, or a URL. */
+type Photo = Blob | string;
+
+/**
+ * A capture path becomes its bytes, read straight from storage by this
+ * function and uploaded to Telegram in the sendPhoto request itself. That is
+ * faster than handing Telegram a signed URL, which it would have to turn round
+ * and fetch before it could send anything. A URL (the sample photo) stays a
+ * URL. If the download fails, a signed URL is the fallback.
+ */
+async function loadPhoto(pathOrUrl: string): Promise<Photo | null> {
   if (/^https?:\/\//.test(pathOrUrl)) return pathOrUrl;
 
-  // A signed URL only has to outlive the sendPhoto call: Telegram fetches
-  // the JPEG once and serves its own copy from then on.
+  const { data: bytes, error: dlErr } = await db.storage.from(BUCKET).download(pathOrUrl);
+  if (bytes) return bytes;
+  console.warn("download failed, trying a signed URL", pathOrUrl, dlErr?.message);
+
   const { data, error } = await db.storage
     .from(BUCKET)
     .createSignedUrl(pathOrUrl, SIGNED_URL_TTL_S);
@@ -91,7 +104,14 @@ async function photoUrl(pathOrUrl: string): Promise<string | null> {
   return data.signedUrl;
 }
 
-async function deliver(job: Job): Promise<"sent" | "failed"> {
+/**
+ * One request's photos, by source. A student's guardians all get the same
+ * picture: the first send uploads it, and Telegram's file_id from that send
+ * serves every guardian after, with nothing uploaded again.
+ */
+type PhotoCache = Map<string, Photo | null>;
+
+async function deliver(job: Job, photos: PhotoCache): Promise<"sent" | "failed"> {
   const sample = !job.image_path && SAMPLE_PHOTO !== "";
   const source = job.image_path ?? (sample ? SAMPLE_PHOTO : null);
   // The label is part of the photo, so it goes on whichever message carries it
@@ -99,12 +119,17 @@ async function deliver(job: Job): Promise<"sent" | "failed"> {
   const text = caption(job, { samplePhoto: sample });
   let result;
 
-  const url = source ? await photoUrl(source) : null;
-  if (url) {
-    result = await sendPhoto(job.chat_id, url, text);
+  let photo: Photo | null = null;
+  if (source) {
+    if (!photos.has(source)) photos.set(source, await loadPhoto(source));
+    photo = photos.get(source) ?? null;
+  }
+  if (photo) {
+    result = await sendPhoto(job.chat_id, photo, text);
+    if (result.ok && result.fileId && source) photos.set(source, result.fileId);
     if (!result.ok && !result.blocked) {
-      // Telegram could not fetch the URL, or the image was rejected. The
-      // arrival still needs reporting.
+      // Telegram rejected the image or could not fetch the URL. The arrival
+      // still needs reporting.
       console.warn("sendPhoto failed, falling back to text", result.error);
       result = await sendMessage(job.chat_id, caption(job));
     }
@@ -170,8 +195,9 @@ Deno.serve(async (req) => {
   }
 
   let sent = 0, failed = 0;
+  const photos: PhotoCache = new Map();
   for (const job of jobs) {
-    const outcome = await deliver(job);
+    const outcome = await deliver(job, photos);
     outcome === "sent" ? sent++ : failed++;
     if (GAP_MS > 0) await sleep(GAP_MS);
   }
