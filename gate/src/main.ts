@@ -93,9 +93,9 @@ const scanner = new Scanner({
   clockSynced: () => clockSynced(),
   show: (view) => hub.broadcast({ type: 'scan', ...view }),
   capture: (eventId) => {
-    const jpeg = camera?.snapshot();
-    if (!jpeg) return false;
-    captures.save(eventId, jpeg);
+    const shot = camera?.snapshot();
+    if (!shot) return false;
+    captures.save(eventId, shot);
     return true;
   },
   unknownCard: () => {
@@ -106,6 +106,7 @@ const scanner = new Scanner({
 
 reader.onCard((uid) => {
   guard('scan', () => scanner.handle(uid));
+  uploader.kick();
   pushState();
 });
 reader.onStatus(pushState);

@@ -10,24 +10,37 @@ export const MAX_FRAME_AGE_MS = 1500;
 // is killed, and the normal restart takes over.
 export const STALL_MS = 10_000;
 
-// The camera streams continuously and the newest frame is kept in memory, so
-// a tap is photographed in zero time. Opening a UVC camera per tap takes a
+// One frame, two pictures: a sharp one for the kiosk monitor and a small one
+// for the upload, which is what the parent's Telegram message carries. Small
+// is what makes it fast: the upload, the bucket and Telegram's own fetch all
+// move ~40 KB instead of ~200 KB.
+export interface Snapshot {
+  kiosk: Buffer;
+  upload: Buffer;
+}
+
+// The camera streams continuously and the newest frames are kept in memory,
+// so a tap is photographed in zero time. Opening a UVC camera per tap takes a
 // second or more, and the first frames are dark while exposure settles.
 export function ffmpegArgs(device: string, platform: NodeJS.Platform = process.platform): string[] {
   const input =
     platform === 'darwin'
       ? // Development on the Mac: a device name ("CyberTrack H3") or index.
-        ['-f', 'avfoundation', '-framerate', '30', '-video_size', '640x480', '-pixel_format', 'uyvy422', '-i', device]
+        ['-f', 'avfoundation', '-framerate', '30', '-video_size', '1280x720', '-pixel_format', 'uyvy422', '-i', device]
       : // The mini PC: the UVC camera's own MJPEG, so the USB link and the CPU
         // carry compressed frames.
-        ['-f', 'v4l2', '-input_format', 'mjpeg', '-video_size', '640x480', '-framerate', '15', '-i', device];
+        ['-f', 'v4l2', '-input_format', 'mjpeg', '-video_size', '1280x720', '-framerate', '15', '-i', device];
   return [
     '-hide_banner', '-loglevel', 'error', '-nostdin',
     ...input,
+    // 5 fps keeps a frame at most 200 ms old for little CPU; split makes both
+    // pictures from the same frame, so the kiosk and the parent see one moment.
+    '-filter_complex', '[0:v]fps=5,split=2[kiosk][up];[up]scale=640:-2:flags=lanczos[small]',
     // Re-encoded rather than copied: UVC MJPEG often omits its Huffman tables,
-    // which browsers and Telegram do not all accept. 5 fps keeps a frame at
-    // most 200 ms old for next to no CPU.
-    '-vf', 'fps=5', '-c:v', 'mjpeg', '-q:v', '5', '-f', 'image2pipe', 'pipe:1',
+    // which browsers and Telegram do not all accept. q 2 is near-lossless.
+    '-map', '[kiosk]', '-c:v', 'mjpeg', '-q:v', '2', '-f', 'image2pipe', 'pipe:1',
+    // 640 wide fills a phone screen in a Telegram chat; q 6 keeps it ~40 KB.
+    '-map', '[small]', '-c:v', 'mjpeg', '-q:v', '6', '-f', 'image2pipe', 'pipe:3',
   ];
 }
 
@@ -43,8 +56,10 @@ export interface CameraOptions {
 export class Camera {
   #o: Required<CameraOptions>;
   #child: ChildProcess | null = null;
-  #frame: Buffer | null = null;
-  #frameAt = 0;
+  #kiosk: Buffer | null = null;
+  #upload: Buffer | null = null;
+  #kioskAt = 0;
+  #uploadAt = 0;
   #stopped = true;
   #restart: NodeJS.Timeout | null = null;
   #watchdog: NodeJS.Timeout | null = null;
@@ -66,14 +81,18 @@ export class Camera {
     this.#onStatus = handler;
   }
 
-  // "Online" is what matters at the gate: a fresh frame, not a live process.
+  // "Online" is what matters at the gate: fresh frames, not a live process.
   get online(): boolean {
-    return this.#frame !== null && this.#o.now() - this.#frameAt <= MAX_FRAME_AGE_MS;
+    const now = this.#o.now();
+    return (
+      this.#kiosk !== null && this.#upload !== null &&
+      now - this.#kioskAt <= MAX_FRAME_AGE_MS && now - this.#uploadAt <= MAX_FRAME_AGE_MS
+    );
   }
 
-  // The newest frame if it is fresh, else null.
-  snapshot(): Buffer | null {
-    return this.online ? this.#frame : null;
+  // The newest pair of pictures if both are fresh, else null.
+  snapshot(): Snapshot | null {
+    return this.online ? { kiosk: this.#kiosk!, upload: this.#upload! } : null;
   }
 
   start(): void {
@@ -99,26 +118,39 @@ export class Camera {
 
   #spawn(): void {
     const { command, args, log, backoff, device } = this.#o;
-    const splitter = new JpegSplitter();
+    const kiosk = new JpegSplitter();
+    const upload = new JpegSplitter();
     let stderr = '';
     let gotFrame = false;
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // fd 3 is the second output (pipe:3), the small picture.
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
     this.#child = child;
     this.#lastOutput = this.#o.now();
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      const frames = splitter.push(chunk);
-      if (frames.length === 0) return;
-      this.#frame = frames.at(-1)!;
-      this.#frameAt = this.#lastOutput = this.#o.now();
-      if (!gotFrame) {
+    const frame = (): void => {
+      this.#lastOutput = this.#o.now();
+      if (!gotFrame && this.#kiosk && this.#upload) {
         gotFrame = true;
         backoff.onSuccess();
         log(`[camera] streaming from ${device}`);
       }
       this.#statusChanged();
+    };
+    child.stdout!.on('data', (chunk: Buffer) => {
+      const frames = kiosk.push(chunk);
+      if (frames.length === 0) return;
+      this.#kiosk = frames.at(-1)!;
+      this.#kioskAt = this.#o.now();
+      frame();
     });
-    child.stderr.on('data', (chunk: Buffer) => {
+    (child.stdio[3] as NodeJS.ReadableStream).on('data', (chunk: Buffer) => {
+      const frames = upload.push(chunk);
+      if (frames.length === 0) return;
+      this.#upload = frames.at(-1)!;
+      this.#uploadAt = this.#o.now();
+      frame();
+    });
+    child.stderr!.on('data', (chunk: Buffer) => {
       stderr = (stderr + chunk.toString()).slice(-500);
     });
     // 'error' (ffmpeg not installed) is followed by 'close', which restarts.
@@ -127,7 +159,7 @@ export class Camera {
     });
     child.on('close', (code, signal) => {
       if (this.#child === child) this.#child = null;
-      this.#frame = null;
+      this.#kiosk = this.#upload = null;
       this.#statusChanged();
       if (this.#stopped) return;
       backoff.onFailure();

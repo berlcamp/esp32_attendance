@@ -1,14 +1,16 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Snapshot } from './camera.ts';
 
 const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // The kiosk shows a tap for one minute; a few recent ones cover a queue of
 // students tapping in quick succession.
 const RECENT = 8;
 
-// Photos of the taps, on disk until they are uploaded (so a capture survives a
-// restart while offline, like the scan itself) and in memory for the kiosk,
-// which must never race the uploader deleting the file.
+// Photos of the taps. The small upload picture is on disk until it is
+// uploaded (so it survives a restart while offline, like the scan itself);
+// the sharp kiosk picture is only in memory, which the kiosk reads without
+// ever racing the uploader deleting the file.
 export class CaptureStore {
   #dir: string;
   #recent = new Map<string, Buffer>();
@@ -23,10 +25,11 @@ export class CaptureStore {
     return join(this.#dir, `${eventId}.jpg`);
   }
 
-  save(eventId: string, jpeg: Buffer): void {
-    this.#recent.set(eventId, jpeg);
+  save(eventId: string, shot: Snapshot): void {
+    const path = this.#path(eventId);
+    this.#recent.set(eventId, shot.kiosk);
     while (this.#recent.size > RECENT) this.#recent.delete(this.#recent.keys().next().value!);
-    writeFileSync(this.#path(eventId), jpeg, { mode: 0o600 });
+    writeFileSync(path, shot.upload, { mode: 0o600 });
   }
 
   // For the kiosk: memory only, so it is fast and cannot be used to read

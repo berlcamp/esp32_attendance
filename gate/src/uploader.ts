@@ -14,6 +14,9 @@ export const MAX_PHOTO_FAILURES = 3;
 // Photo uploads in one step, so a backlog of photos after an outage does not
 // hold every scan behind it for long.
 export const PHOTOS_PER_STEP = 10;
+// How long an empty queue waits before looking again. A tap does not wait
+// for it: kick() starts the upload at once.
+export const IDLE_MS = 250;
 
 export interface AttendanceEvent {
   event_id: string;
@@ -69,6 +72,7 @@ export class Uploader {
   #photos: PhotoDeps | null;
   #stopped = false;
   #wake: (() => void) | null = null;
+  #idle = false;
 
   constructor(
     queue: ScanQueue,
@@ -90,7 +94,7 @@ export class Uploader {
   async step(nowMs = Date.now()): Promise<number> {
     if (!this.netOn) return 500;
     const taken = this.#queue.take(UPLOAD_BATCH_SIZE);
-    if (taken.length === 0) return 250;
+    if (taken.length === 0) return IDLE_MS;
 
     // Photos first: notify-guardian fires on the INSERT, so a scan's
     // image_path must be in the row it creates or the parent gets text.
@@ -211,6 +215,7 @@ export class Uploader {
         wait = 5000;
       }
       if (wait > 0 && !this.#stopped) {
+        this.#idle = wait === IDLE_MS;
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, wait);
           this.#wake = () => {
@@ -219,8 +224,15 @@ export class Uploader {
           };
         });
         this.#wake = null;
+        this.#idle = false;
       }
     }
+  }
+
+  // A new scan was queued: send it now rather than at the next idle check.
+  // Only an idle wait is cut short; a backoff after a failure is kept.
+  kick(): void {
+    if (this.#idle) this.#wake?.();
   }
 
   stop(): void {

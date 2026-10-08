@@ -213,3 +213,21 @@ test('a capture missing from disk does not hold the scan', async () => {
   assert.equal(p.uploaded.length, 0);
   assert.equal(calls[0].events.length, 1);
 });
+
+test('kick() sends a new scan at once, but never cuts a backoff short', async () => {
+  const { queue, calls, up, add } = setup([{ status: 503, body: 'down' }]);
+  const running = up.run();
+  try {
+    await new Promise((r) => setTimeout(r, 20)); // now idle on an empty queue
+    add(1);
+    up.kick();
+    await waitFor(() => calls.length === 1, 100); // well inside the idle wait
+    up.kick(); // the 503 put it in a 2 s backoff
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(calls.length, 1);
+    assert.equal(queue.depth(), 1);
+  } finally {
+    up.stop();
+    await running;
+  }
+});

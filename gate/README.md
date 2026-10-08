@@ -47,8 +47,11 @@ the sample image.
                                -> gate-capture (checks GATE_TOKEN) -> gate-captures bucket
                                -> record_attendance(image_path) -> notify-guardian -> sendPhoto
 
-ffmpeg streams the camera continuously and the gate keeps only the newest
-frame (at most ~200 ms old), so taking a photo takes no time. Each photo is
+ffmpeg streams the camera at 1280x720 and the gate keeps only the newest
+frame (at most ~200 ms old), so taking a photo takes no time. Every frame
+comes in two sizes: a sharp 720p one for the kiosk, kept in memory only, and
+a 640-wide one for upload, which keeps the upload and Telegram fast. Each tap
+wakes the uploader at once. Each photo is
 uploaded *before* its scan, because the Telegram message goes out on the
 INSERT. A photo never holds a scan back for long: offline, both wait;
 on 5xx the photo is retried 3 times; on 4xx (function not deployed, bad
