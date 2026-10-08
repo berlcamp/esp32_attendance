@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createRpc, explainFailure } from './supabase.ts';
+import { createPhotoUpload, createRpc, explainFailure, parsePhotoPath } from './supabase.ts';
 
 type Handler = (req: IncomingMessage, body: string) => Promise<{ status: number; body: string }>;
 
@@ -72,4 +72,31 @@ test('explainFailure turns known server errors into the fix', () => {
   );
   assert.match(explainFailure('{"code":"42501"}', 'gate-01-pc') ?? '', /EXECUTE/);
   assert.equal(explainFailure('something else', 'gate-01-pc'), null);
+});
+
+test('a photo is posted as raw JPEG to gate-capture with the device credentials', async () => {
+  let seen: { url?: string; headers?: IncomingHttpHeaders; size?: number } = {};
+  await withServer(
+    async (req, body) => {
+      seen = { url: req.url, headers: req.headers, size: Buffer.byteLength(body, 'latin1') };
+      return { status: 200, body: '{"path":"s1/gate-01-pc/e1.jpg"}' };
+    },
+    async (url) => {
+      const upload = createPhotoUpload(url, 'anon', 'gate-01-pc', 'gt_secret');
+      const res = await upload('e1', Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+      assert.equal(res.status, 200);
+    },
+  );
+  assert.equal(seen.url, '/functions/v1/gate-capture');
+  assert.equal(seen.headers?.['content-type'], 'image/jpeg');
+  assert.equal(seen.headers?.['x-device-id'], 'gate-01-pc');
+  assert.equal(seen.headers?.['x-gate-token'], 'gt_secret');
+  assert.equal(seen.headers?.['x-event-id'], 'e1');
+});
+
+test('parsePhotoPath accepts only an object path', () => {
+  assert.equal(parsePhotoPath('{"path":"6f1c/gate-01-pc/0b9e-11.jpg"}'), '6f1c/gate-01-pc/0b9e-11.jpg');
+  for (const body of ['', '<html>', '{"path":1}', '{"path":"x.jpg"}', '{"path":"../a/b.jpg"}', '{}']) {
+    assert.equal(parsePhotoPath(body), null, body);
+  }
 });

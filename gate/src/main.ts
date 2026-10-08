@@ -1,5 +1,7 @@
 import { statfsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { Camera } from './camera/camera.ts';
+import { CaptureStore } from './camera/captures.ts';
 import { createClockProbe } from './clock.ts';
 import { loadConfig, type Config } from './config.ts';
 import type { ControlApi } from './control.ts';
@@ -12,7 +14,7 @@ import { ScanQueue } from './queue.ts';
 import { createReader } from './reader/index.ts';
 import { RosterMirror, RosterSync } from './roster.ts';
 import { Scanner } from './scanner.ts';
-import { createRpc } from './supabase.ts';
+import { createPhotoUpload, createRpc } from './supabase.ts';
 import { Uploader } from './uploader.ts';
 
 // Replaced at build time by scripts/build.mjs with the git revision.
@@ -43,7 +45,14 @@ const queue = new ScanQueue(db);
 const mirror = new RosterMirror(db);
 const rpc = createRpc(config.supabaseUrl, config.anonKey);
 const roster = new RosterSync(mirror, rpc, config.deviceId, config.gateToken, log);
-const uploader = new Uploader(queue, rpc, config.deviceId, log);
+// Always opened, camera or not: scans queued with a photo before the camera
+// was switched off still have their captures to upload.
+const captures = new CaptureStore(config.captureDir);
+const camera = config.cameraDevice ? new Camera({ device: config.cameraDevice, log }) : null;
+const uploader = new Uploader(queue, rpc, config.deviceId, log, {
+  upload: createPhotoUpload(config.supabaseUrl, config.anonKey, config.deviceId, config.gateToken),
+  store: captures,
+});
 const reader = createReader(config, log);
 reader.setEnabled(getMeta(db, 'reader_enabled') !== '0');
 const hub = new SseHub();
@@ -58,6 +67,7 @@ const state = (): GateState => ({
   queueDepth: queue.depth(),
   netOn: uploader.netOn,
   uploadOk: uploader.lastOk,
+  cameraOnline: camera ? camera.online : null,
 });
 // Every event source (reader callback, timers, background promises) goes
 // through this: a SQLite or I/O error is logged, never allowed to kill the
@@ -82,6 +92,12 @@ const scanner = new Scanner({
   cooldown: new Cooldown(),
   clockSynced: () => clockSynced(),
   show: (view) => hub.broadcast({ type: 'scan', ...view }),
+  capture: (eventId) => {
+    const jpeg = camera?.snapshot();
+    if (!jpeg) return false;
+    captures.save(eventId, jpeg);
+    return true;
+  },
   unknownCard: () => {
     roster.requestResync();
   },
@@ -93,6 +109,7 @@ reader.onCard((uid) => {
   pushState();
 });
 reader.onStatus(pushState);
+camera?.onStatus(pushState);
 
 function diskFreeMb(): number | null {
   try {
@@ -112,6 +129,10 @@ const control: ControlApi = {
     sent: uploader.sent,
     failed: uploader.failed,
     duplicates: uploader.duplicates,
+    camera: config.cameraDevice,
+    photosSent: uploader.photosSent,
+    photosSkipped: uploader.photosSkipped,
+    capturesOnDisk: captures.count(),
     dropped: queue.dropped(),
     saveFailures: scanner.failures,
     rosterStudents: mirror.studentCount(),
@@ -143,18 +164,22 @@ const control: ControlApi = {
 function prune(): void {
   const n = queue.prune(new Date(Date.now() - KEEP_SENT_MS).toISOString());
   if (n > 0) log(`[queue] pruned ${n} sent scan(s) older than 7 days`);
+  const c = captures.prune(KEEP_SENT_MS);
+  if (c > 0) log(`[photo] deleted ${c} capture(s) older than 7 days that were never uploaded`);
 }
 
-const server = createGateServer({ hub, version: VERSION, control });
+const server = createGateServer({ hub, version: VERSION, control, captures });
 server.listen(config.httpPort, config.httpHost, () => {
   log(`[http] page and control on http://${config.httpHost}:${config.httpPort}`);
 });
 
 log(
   `[sys] gate ${VERSION} device=${config.deviceId} reader=${config.reader} ` +
-    `db=${config.dbPath} pending=${queue.depth()} reader_enabled=${reader.enabled}`,
+    `db=${config.dbPath} pending=${queue.depth()} reader_enabled=${reader.enabled} ` +
+    `camera=${config.cameraDevice ?? 'none'}`,
 );
 reader.start();
+camera?.start();
 guard('prune', prune);
 syncRoster();
 void uploader.run();
@@ -170,6 +195,7 @@ function shutdown(signal: string): void {
   log(`[sys] ${signal} -- stopping`);
   for (const t of timers) clearInterval(t);
   reader.stop();
+  camera?.stop();
   uploader.stop();
   server.closeAllConnections();
   server.close();

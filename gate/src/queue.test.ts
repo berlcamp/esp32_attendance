@@ -70,3 +70,18 @@ test('prune deletes only SENT rows older than the cutoff', () => {
   assert.equal(q.prune('2026-10-05T00:00:00.000Z'), 1);
   assert.equal(q.depth(), 1);
 });
+
+test('a scan carries its photo state through upload', () => {
+  const q = new ScanQueue(openDb(':memory:'));
+  q.enqueue({ ...scan(1), photo: true });
+  q.enqueue(scan(2));
+  let [a, b] = q.take(10);
+  assert.deepEqual([a.photo, a.imagePath, a.photoFailures], [true, null, 0]);
+  assert.equal(b.photo, false);
+  assert.equal(q.photoFailed(a.id), 1);
+  q.setImagePath(a.id, 'school/gate/x.jpg');
+  [a] = q.take(1);
+  assert.deepEqual([a.imagePath, a.photoFailures], ['school/gate/x.jpg', 1]);
+  q.photoLost(a.id);
+  assert.equal(q.take(1)[0].photo, false);
+});

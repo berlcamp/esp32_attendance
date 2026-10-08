@@ -25,6 +25,12 @@ const MIGRATIONS: readonly string[] = [
      card_uid   text primary key,
      student_id text not null
    );`,
+  // The gate camera. photo: a capture was saved for this scan. image_path: its
+  // object path once uploaded. photo_failures: uploads the server refused; at
+  // the limit the scan is sent without its photo rather than held back.
+  `alter table scans add column photo          integer not null default 0;
+   alter table scans add column image_path     text;
+   alter table scans add column photo_failures integer not null default 0;`,
 ];
 
 export function openDb(path: string): DatabaseSync {

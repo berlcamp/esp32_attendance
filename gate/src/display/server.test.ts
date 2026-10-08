@@ -7,8 +7,10 @@ import { SseHub, type GateEvent, type GateState } from './sse.ts';
 
 const STATE: GateState = {
   version: 'test123', readerOnline: true, readerEnabled: true, rosterSyncedAt: null,
-  rosterStale: true, queueDepth: 0, netOn: true, uploadOk: null,
+  rosterStale: true, queueDepth: 0, netOn: true, uploadOk: null, cameraOnline: null,
 };
+const PHOTO_ID = '0b9e5a1c-2f3d-4e5f-8a9b-0c1d2e3f4a5b';
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 const api: ControlApi = {
   status: () => ({ ok: true }), inject: () => {}, burst: () => {}, setNet: () => {}, setReader: () => {},
   queueDepth: () => 0, queueDump: () => [], syncRoster: async () => 'ok',
@@ -16,7 +18,8 @@ const api: ControlApi = {
 
 async function start() {
   const hub = new SseHub();
-  const server = createGateServer({ hub, version: 'test123', control: api });
+  const captures = { recent: (id: string) => (id === PHOTO_ID ? JPEG : null) };
+  const server = createGateServer({ hub, version: 'test123', control: api, captures });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const close = async () => {
@@ -72,7 +75,7 @@ test('/events replays the last state to a new client, then streams scans', async
   try {
     hub.broadcast({ type: 'state', state: STATE });
     const events = await readEvents(`${base}/events`, 2, () =>
-      hub.broadcast({ type: 'scan', uid: '0002008108', at: '2026-10-05T07:00:00.000Z', student: null }),
+      hub.broadcast({ type: 'scan', uid: '0002008108', at: '2026-10-05T07:00:00.000Z', student: null, photo: null }),
     );
     assert.deepEqual(events[0], { type: 'state', state: STATE });
     assert.equal(events[1].type, 'scan');
@@ -107,6 +110,20 @@ test('the kiosk logos and backdrop are served with their types', async () => {
     assert.equal(bg.headers.get('content-type'), 'image/svg+xml');
     assert.match(await bg.text(), /^<svg /);
     assert.equal((await fetch(`${base}/assets/../server.ts`)).status, 404);
+  } finally {
+    await close();
+  }
+});
+
+test('a recent tap photo is served as a JPEG; anything else is 404', async () => {
+  const { base, close } = await start();
+  try {
+    const res = await fetch(`${base}/captures/${PHOTO_ID}.jpg`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/jpeg');
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), JPEG);
+    assert.equal((await fetch(`${base}/captures/${PHOTO_ID.replace('0b', '0c')}.jpg`)).status, 404);
+    assert.equal((await fetch(`${base}/captures/`)).status, 404);
   } finally {
     await close();
   }

@@ -35,10 +35,10 @@ test('a known card reaches the SCREEN before the queue', () => {
   const { scanner, order, queued, views, clock } = setup();
   assert.equal(scanner.handle('0002008108'), 'queued');
   assert.deepEqual(order, ['show', 'enqueue']);
-  assert.deepEqual(views[0], { uid: '0002008108', at: '2026-10-05T07:00:00.000Z', student: JUAN });
+  assert.deepEqual(views[0], { uid: '0002008108', at: '2026-10-05T07:00:00.000Z', student: JUAN, photo: null });
   assert.deepEqual(queued[0], {
     eventId: 'id-1', cardUid: '0002008108', deviceId: 'gate-01-pc',
-    scannedAt: '2026-10-05T07:00:00.000Z', clockSynced: true,
+    scannedAt: '2026-10-05T07:00:00.000Z', clockSynced: true, photo: false,
   });
   assert.equal(clock.unknown, 0);
 });
@@ -96,4 +96,22 @@ test('a full queue is reported as dropped, after the screen updated', () => {
   const { scanner, views } = setup({ queue: { enqueue: () => false } });
   assert.equal(scanner.handle('0002008108'), 'dropped');
   assert.equal(views.length, 1);
+});
+
+test('the camera frame is taken first, shown on the screen and queued with the scan', () => {
+  const { scanner, order, queued, views } = setup({
+    capture: (eventId) => { order.push(`capture ${eventId}`); return true; },
+  });
+  scanner.handle('0002008108');
+  assert.deepEqual(order, ['capture id-1', 'show', 'enqueue']);
+  assert.equal(views[0].photo, '/captures/id-1.jpg');
+  assert.equal(queued[0].photo, true);
+});
+
+test('a camera error costs the photo, never the scan', () => {
+  const { scanner, queued, views, logs } = setup({ capture: () => { throw new Error('disk full'); } });
+  assert.equal(scanner.handle('0002008108'), 'queued');
+  assert.equal(views[0].photo, null);
+  assert.equal(queued[0].photo, false);
+  assert.ok(logs.some((l) => l.includes('disk full')));
 });

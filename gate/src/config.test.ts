@@ -19,6 +19,14 @@ test('a complete environment loads, with defaults filled in', () => {
   assert.equal(c.dbPath, '/var/lib/gate/gate.db');
   assert.equal(c.httpHost, '127.0.0.1');
   assert.equal(c.httpPort, 8080);
+  assert.equal(c.cameraDevice, null);
+  assert.equal(c.captureDir, '/var/lib/gate/captures');
+});
+
+test('the camera is optional and its captures live beside the database', () => {
+  const c = loadConfig({ ...VALID, CAMERA_DEVICE: ' /dev/v4l/by-id/usb-cam-video-index0 ', DB_PATH: './gate-dev.db' });
+  assert.equal(c.cameraDevice, '/dev/v4l/by-id/usb-cam-video-index0');
+  assert.equal(c.captureDir, 'captures');
 });
 
 test('every missing key is reported at once, not one per restart', () => {

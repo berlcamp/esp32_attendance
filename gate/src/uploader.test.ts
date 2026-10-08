@@ -4,12 +4,12 @@ import { randomUUID } from 'node:crypto';
 import { openDb } from './db.ts';
 import { ScanQueue } from './queue.ts';
 import type { Rpc, RpcResult } from './supabase.ts';
-import { Uploader, parseInserted, toPayload, type AttendanceEvent } from './uploader.ts';
+import { Uploader, parseInserted, toPayload, type AttendanceEvent, type PhotoDeps } from './uploader.ts';
 import { waitFor } from './test-helpers.ts';
 
 const NOW = Date.parse('2026-10-05T07:00:30.000Z');
 
-function setup(responses: RpcResult[] = []) {
+function setup(responses: RpcResult[] = [], photos: PhotoDeps | null = null) {
   const queue = new ScanQueue(openDb(':memory:'));
   const calls: { fn: string; events: AttendanceEvent[] }[] = [];
   const rpc: Rpc = async (fn, args) => {
@@ -17,17 +17,24 @@ function setup(responses: RpcResult[] = []) {
     return responses.shift() ?? { status: 200, body: String((args as { events: unknown[] }).events.length) };
   };
   const logs: string[] = [];
-  const up = new Uploader(queue, rpc, 'gate-01-pc', (l) => logs.push(l));
-  const add = (n: number) => {
+  const up = new Uploader(queue, rpc, 'gate-01-pc', (l) => logs.push(l), photos);
+  const add = (n: number, photo = false) => {
+    const ids: string[] = [];
     for (let i = 0; i < n; i++) {
-      queue.enqueue({ eventId: randomUUID(), cardUid: '0002008108', deviceId: 'gate-01-pc', scannedAt: new Date(NOW).toISOString(), clockSynced: true });
+      const eventId = randomUUID();
+      ids.push(eventId);
+      queue.enqueue({ eventId, cardUid: '0002008108', deviceId: 'gate-01-pc', scannedAt: new Date(NOW).toISOString(), clockSynced: true, photo });
     }
+    return ids;
   };
   return { queue, calls, up, logs, add };
 }
 
 test('toPayload builds the record_attendance event, queued after 15 s', () => {
-  const base = { id: 1, eventId: 'e1', cardUid: '0002008108', deviceId: 'gate-01-pc', clockSynced: false };
+  const base = {
+    id: 1, eventId: 'e1', cardUid: '0002008108', deviceId: 'gate-01-pc', clockSynced: false,
+    photo: false, imagePath: null, photoFailures: 0,
+  };
   const fresh = new Date(NOW - 14_000).toISOString();
   const [a, b] = toPayload(
     [{ ...base, scannedAt: fresh }, { ...base, id: 2, eventId: 'e2', scannedAt: new Date(NOW - 16_000).toISOString() }],
@@ -117,4 +124,92 @@ test('run() drains the queue until stopped', async () => {
   await waitFor(() => queue.depth() === 0);
   up.stop();
   await running;
+});
+
+// A fake gate-capture: answers from `answers` in turn (default: stored), and a
+// capture store holding a JPEG for every event id unless told otherwise.
+function photoFake(answers: RpcResult[] = [], missing = new Set<string>()) {
+  const uploaded: string[] = [];
+  const removed: string[] = [];
+  const deps: PhotoDeps = {
+    upload: async (eventId) => {
+      uploaded.push(eventId);
+      return answers.shift() ?? { status: 200, body: JSON.stringify({ path: `s1/gate-01-pc/${eventId}.jpg` }) };
+    },
+    store: {
+      read: (eventId) => (missing.has(eventId) ? null : Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+      remove: (eventId) => void removed.push(eventId),
+    },
+  };
+  return { deps, uploaded, removed };
+}
+
+test('a photo is uploaded before its scan, which then carries image_path', async () => {
+  const p = photoFake();
+  const { queue, calls, up, add } = setup([], p.deps);
+  const [id] = add(1, true);
+  add(1, false);
+  assert.equal(await up.step(NOW), 0);
+  assert.deepEqual(p.uploaded, [id]);
+  assert.equal(calls[0].events[0].image_path, `s1/gate-01-pc/${id}.jpg`);
+  assert.equal('image_path' in calls[0].events[1], false);
+  assert.equal(queue.depth(), 0);
+  assert.deepEqual(p.removed, [id], 'the local capture is deleted once delivered');
+  assert.equal(up.photosSent, 1);
+});
+
+test('REVIEW FOCUS: offline, neither the photo nor the scan is lost or sent without it', async () => {
+  const p = photoFake([{ status: 0, body: 'ENOTFOUND' }]);
+  const { queue, calls, up, add } = setup([], p.deps);
+  add(1, true);
+  assert.equal(await up.step(NOW), 2000);
+  assert.equal(calls.length, 0);
+  assert.equal(queue.take(1)[0].photoFailures, 0, 'being offline is not the photo failing');
+  await up.step(NOW);
+  assert.match(calls[0].events[0].image_path ?? '', /\.jpg$/);
+});
+
+test('a server error is retried, then the scan goes without its photo', async () => {
+  const p = photoFake([500, 502, 503].map((status) => ({ status, body: 'boom' })));
+  const { queue, calls, up, add, logs } = setup([], p.deps);
+  add(1, true);
+  await up.step(NOW);
+  await up.step(NOW);
+  assert.equal(calls.length, 0);
+  await up.step(NOW);
+  assert.equal(calls.length, 1);
+  assert.equal('image_path' in calls[0].events[0], false);
+  assert.equal(queue.depth(), 0);
+  assert.equal(up.photosSkipped, 1);
+  assert.ok(logs.some((l) => l.includes('without its photo')), logs.join('\n'));
+});
+
+test('a 404 (function not deployed) sends the scan at once, without the photo', async () => {
+  const p = photoFake([{ status: 404, body: 'not found' }]);
+  const { calls, up, add, logs } = setup([], p.deps);
+  add(1, true);
+  assert.equal(await up.step(NOW), 0);
+  assert.equal(calls.length, 1);
+  assert.ok(logs.some((l) => l.includes('functions deploy gate-capture')), logs.join('\n'));
+});
+
+test('scans stay in order: a retried photo holds back the scans behind it', async () => {
+  const p = photoFake([{ status: 200, body: '{"path":"s1/g/a.jpg"}' }, { status: 503, body: '' }]);
+  const { calls, up, add } = setup([], p.deps);
+  const ids = [...add(1, true), ...add(1, true), ...add(1, false)];
+  await up.step(NOW);
+  assert.deepEqual(calls[0].events.map((e) => e.event_id), [ids[0]]);
+  await up.step(NOW);
+  assert.deepEqual(calls[1].events.map((e) => e.event_id), [ids[1], ids[2]]);
+});
+
+test('a capture missing from disk does not hold the scan', async () => {
+  const missing = new Set<string>();
+  const p = photoFake([], missing);
+  const { calls, up, add } = setup([], p.deps);
+  const [id] = add(1, true);
+  missing.add(id);
+  await up.step(NOW);
+  assert.equal(p.uploaded.length, 0);
+  assert.equal(calls[0].events.length, 1);
 });

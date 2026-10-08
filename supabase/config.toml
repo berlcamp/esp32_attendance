@@ -1,9 +1,13 @@
-# Both functions authenticate with their own shared secret -- notify-guardian
-# with x-webhook-secret, telegram-webhook with the header Telegram sends -- so
-# neither can require a Supabase JWT. Telegram will not send one, and a
-# Database Webhook has no user session to send one from.
+# Every function authenticates with its own secret -- notify-guardian with
+# x-webhook-secret, telegram-webhook with the header Telegram sends,
+# gate-capture with the gate's x-gate-token -- so none can require a Supabase
+# JWT. Telegram will not send one, a Database Webhook has no user session to
+# send one from, and the gate has only the anon key.
 [functions.notify-guardian]
 verify_jwt = false
 
 [functions.telegram-webhook]
+verify_jwt = false
+
+[functions.gate-capture]
 verify_jwt = false

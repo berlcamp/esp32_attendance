@@ -8,7 +8,7 @@ test('a new database gets every table and the current schema version', () => {
   const tables = (db.prepare("select name from sqlite_master where type = 'table'").all() as unknown as { name: string }[])
     .map((r) => r.name);
   for (const t of ['scans', 'roster', 'cards', 'meta']) assert.ok(tables.includes(t), t);
-  assert.equal(getMeta(db, 'schema_version'), '1');
+  assert.equal(getMeta(db, 'schema_version'), '2');
 });
 
 test('a file database runs in WAL mode with synchronous=FULL', () => {
@@ -24,7 +24,7 @@ test('reopening keeps data and does not re-run migrations', () => {
   a.close();
   const b = openDb(path);
   assert.equal(getMeta(b, 'k'), 'v');
-  assert.equal(getMeta(b, 'schema_version'), '1');
+  assert.equal(getMeta(b, 'schema_version'), '2');
 });
 
 test('a database written by a newer gate version is refused, not misread', () => {
@@ -45,4 +45,20 @@ test('tx rolls everything back when the body throws', () => {
   const db = openDb(':memory:');
   assert.throws(() => tx(db, () => { setMeta(db, 'k', 'v'); throw new Error('boom'); }), /boom/);
   assert.equal(getMeta(db, 'k'), null);
+});
+
+test('a version-1 database with queued scans upgrades and keeps them', () => {
+  const path = tmpPath('gate.db');
+  const a = openDb(path);
+  // Wind back to what a gate in the field has before the camera release.
+  a.exec('alter table scans drop column photo; alter table scans drop column image_path; alter table scans drop column photo_failures;');
+  setMeta(a, 'schema_version', '1');
+  a.prepare("insert into scans (event_id, card_uid, device_id, scanned_at, clock_synced) values ('e1', 'u', 'd', 't', 1)").run();
+  a.close();
+  const b = openDb(path);
+  assert.equal(getMeta(b, 'schema_version'), '2');
+  assert.deepEqual(
+    { ...(b.prepare('select event_id, photo, image_path, photo_failures from scans').get() as object) },
+    { event_id: 'e1', photo: 0, image_path: null, photo_failures: 0 },
+  );
 });

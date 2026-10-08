@@ -31,6 +31,51 @@ export function createRpc(supabaseUrl: string, anonKey: string, timeoutMs = 15_0
   };
 }
 
+// The gate camera's upload: the JPEG goes to the gate-capture Edge Function,
+// which checks GATE_TOKEN and stores it in the private bucket. The anon key
+// alone can write nothing there. 200 answers {"path": "<object path>"}.
+export type PhotoUpload = (eventId: string, jpeg: Buffer) => Promise<RpcResult>;
+
+export function createPhotoUpload(
+  supabaseUrl: string,
+  anonKey: string,
+  deviceId: string,
+  gateToken: string,
+  timeoutMs = 15_000,
+): PhotoUpload {
+  return async (eventId, jpeg) => {
+    try {
+      const res = await fetch(`${supabaseUrl}/functions/v1/gate-capture`, {
+        method: 'POST',
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`,
+          'Content-Type': 'image/jpeg',
+          'x-device-id': deviceId,
+          'x-gate-token': gateToken,
+          'x-event-id': eventId,
+        },
+        body: new Uint8Array(jpeg),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return { status: res.status, body: await res.text() };
+    } catch (err) {
+      return { status: 0, body: err instanceof Error ? err.message : String(err) };
+    }
+  };
+}
+
+// The object path from a gate-capture 200, or null if the body is not one
+// (a captive portal's 200 again).
+export function parsePhotoPath(body: string): string | null {
+  try {
+    const path: unknown = (JSON.parse(body) as { path?: unknown }).path;
+    return typeof path === 'string' && /^\w[\w.-]*(\/\w[\w.-]*)+\.jpg$/.test(path) ? path : null;
+  } catch {
+    return null;
+  }
+}
+
 // Same hints the firmware printed, plus the device token. Order matters: the
 // specific 42501 messages are checked before the generic one.
 export function explainFailure(body: string, deviceId: string): string | null {

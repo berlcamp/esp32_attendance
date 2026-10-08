@@ -10,10 +10,12 @@ export interface GateState {
   queueDepth: number;
   netOn: boolean;
   uploadOk: boolean | null;
+  // null: no camera configured on this gate.
+  cameraOnline: boolean | null;
 }
 
 export type GateEvent =
-  | { type: 'scan'; uid: string; at: string; student: Student | null }
+  | { type: 'scan'; uid: string; at: string; student: Student | null; photo: string | null }
   | { type: 'state'; state: GateState };
 
 export function formatSse(event: GateEvent): string {

@@ -1,6 +1,8 @@
 // Configuration comes from /etc/gate/gate.env via systemd's EnvironmentFile=,
 // replacing include/secrets.h. Every problem is reported in one error so a
 // misconfigured box needs one fix, not one restart per missing key.
+import { dirname, join } from 'node:path';
+
 export type ReaderKind = 'evdev' | 'keyboard' | 'simulated';
 
 export interface Config {
@@ -13,6 +15,10 @@ export interface Config {
   dbPath: string;
   httpHost: string;
   httpPort: number;
+  // The gate camera: a v4l2 device on the mini PC, an avfoundation name or
+  // index on the Mac. null means no camera; taps are recorded without photos.
+  cameraDevice: string | null;
+  captureDir: string;
 }
 
 const READERS: readonly string[] = ['evdev', 'keyboard', 'simulated'];
@@ -64,6 +70,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     throw new Error(`gate configuration is invalid:\n  - ${problems.join('\n  - ')}`);
   }
 
+  const dbPath = env.DB_PATH?.trim() || '/var/lib/gate/gate.db';
   return {
     supabaseUrl,
     anonKey,
@@ -71,8 +78,11 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     gateToken,
     reader: reader as ReaderKind,
     readerDevice,
-    dbPath: env.DB_PATH?.trim() || '/var/lib/gate/gate.db',
+    dbPath,
     httpHost: env.HTTP_HOST?.trim() || '127.0.0.1',
     httpPort,
+    cameraDevice: env.CAMERA_DEVICE?.trim() || null,
+    // Beside the database, so it is inside systemd's StateDirectory.
+    captureDir: env.CAPTURE_DIR?.trim() || join(dirname(dbPath), 'captures'),
   };
 }

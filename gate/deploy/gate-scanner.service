@@ -1,5 +1,5 @@
 [Unit]
-Description=Gate scanner (card reader, queue, uploader, kiosk page)
+Description=Gate scanner (card reader, camera, queue, uploader, kiosk page)
 After=network-online.target
 Wants=network-online.target
 # Never give up restarting: the default start limit (5 in 10 s) would leave a
@@ -9,7 +9,7 @@ StartLimitIntervalSec=0
 [Service]
 User=gate
 Group=gate
-SupplementaryGroups=input
+SupplementaryGroups=input video
 EnvironmentFile=/etc/gate/gate.env
 Environment=DB_PATH=/var/lib/gate/gate.db
 StateDirectory=gate

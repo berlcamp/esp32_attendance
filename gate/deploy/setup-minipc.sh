@@ -11,7 +11,7 @@ timedatectl set-timezone Asia/Manila
 timedatectl set-ntp true
 
 apt-get update
-apt-get install -y ca-certificates curl evtest cage rsync
+apt-get install -y ca-certificates curl evtest cage rsync ffmpeg v4l-utils
 
 # Node 22 LTS (node:sqlite unflagged from 22.13).
 if ! node --version 2>/dev/null | grep -q '^v22\.'; then
@@ -26,10 +26,10 @@ if ! command -v google-chrome >/dev/null; then
   apt-get install -y /tmp/chrome.deb
 fi
 
-# gate: runs the scanner, may read input devices. kiosk: runs the browser and
+# gate: runs the scanner, may read input devices and the camera. kiosk: runs the browser and
 # deliberately may NOT -- the page never needs the reader.
 id gate >/dev/null 2>&1 || useradd --create-home --shell /bin/bash gate
-usermod -aG input gate
+usermod -aG input,video gate
 id kiosk >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin kiosk
 usermod -aG video,render kiosk
 

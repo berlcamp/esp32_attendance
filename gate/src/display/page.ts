@@ -1,5 +1,6 @@
 // The kiosk page: the DepEd seal left, the school logo right, a sample school
-// backdrop, a photo placeholder (initials for now), and text for the scan: name, student number, grade, section, time,
+// backdrop, the gate camera's photo of the tap (initials when there is none),
+// and text for the scan: name, student number, grade, section, time,
 // known/unknown (spec, Decisions). Rendered with textContent, never
 // innerHTML, so a student's name cannot inject markup. It reloads itself when
 // the service reports a different version, so a deploy reaches the monitor
@@ -51,6 +52,8 @@ export const PAGE_HTML = String.raw`<!doctype html>
   #photo svg { position: absolute; bottom: 0; width: 90%; fill: rgba(255,255,255,.08); }
   #initials { position: relative; font-size: 10vh; font-weight: 800; color: rgba(255,255,255,.85); }
   #photo small { position: absolute; bottom: 1.4vh; font-size: 1.8vh; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+  #shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #photo.shot svg, #photo.shot #initials, #photo.shot small { display: none; }
   .info { min-width: 0; flex: 1; }
   #status { font-size: 4vh; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
   #status.known { color: var(--ok); }
@@ -81,6 +84,7 @@ export const PAGE_HTML = String.raw`<!doctype html>
       <svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="36" r="20"/><path d="M10 100c0-24 18-38 40-38s40 14 40 38z"/></svg>
       <span id="initials"></span>
       <small>Photo</small>
+      <img id="shot" alt="" hidden>
     </div>
     <div class="info">
       <div id="status">Please tap your card</div>
@@ -101,8 +105,8 @@ let connected = false;
 const IDLE_MS = 60 * 1000;
 let idleTimer = null;
 
-// A placeholder until students have photos: their initials, given name first,
-// from "Surname, Given" or "Given Surname".
+// Shown when the tap has no photo (no camera, or no fresh frame): the
+// student's initials, given name first, from "Surname, Given" or "Given Surname".
 function initials(fullName) {
   const comma = fullName.indexOf(',');
   const words = fullName.trim().split(/\s+/);
@@ -111,8 +115,18 @@ function initials(fullName) {
   return ((given[0] || '') + (surname[0] || '')).toUpperCase() || '?';
 }
 
+// The camera's photo of this tap replaces the placeholder. An image that
+// fails to load falls back to the initials rather than a broken-image icon.
+function renderPhoto(url) {
+  const shot = $('shot');
+  shot.hidden = !url;
+  $('photo').className = url ? 'shot' : '';
+  if (url) shot.src = url;
+}
+
 function renderIdle() {
   $('card').className = 'idle';
+  renderPhoto(null);
   $('initials').textContent = '';
   $('status').className = '';
   $('status').textContent = 'Please tap your card';
@@ -131,6 +145,7 @@ function renderScan(e) {
   const s = e.student;
   $('card').className = s ? 'known' : 'unknown';
   $('initials').textContent = s ? initials(s.full_name) : '?';
+  renderPhoto(e.photo || null);
   $('status').className = s ? 'known' : 'unknown';
   $('status').textContent = s ? 'Welcome' : 'Unknown card';
   $('name').textContent = s ? s.full_name : e.uid;
@@ -147,6 +162,7 @@ function renderBanners() {
   } else if (state) {
     if (!state.readerOnline) list.push(['bad', 'READER OFFLINE — check the reader USB cable']);
     else if (!state.readerEnabled) list.push(['bad', 'Reader paused — cards are not being accepted']);
+    if (state.cameraOnline === false) list.push(['quiet', 'Camera offline — taps are recorded without photos']);
     if (state.rosterStale) {
       list.push(['quiet', state.rosterSyncedAt
         ? 'Student list last updated ' + new Date(state.rosterSyncedAt).toLocaleString()
@@ -163,6 +179,8 @@ function renderBanners() {
     return div;
   }));
 }
+
+$('shot').onerror = () => renderPhoto(null);
 
 const events = new EventSource('/events');
 events.onopen = () => { connected = true; renderBanners(); };

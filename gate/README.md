@@ -37,6 +37,34 @@ Put the `gt_...` result in `/etc/gate/gate.env` as `GATE_TOKEN`. It is shown
 once; running it again issues a new token and invalidates the old one, which
 is also how a stolen mini PC is locked out.
 
+## Camera
+
+A USB (UVC) webcam photographs every tap. The photo replaces the placeholder
+on the kiosk at once, and goes to the parent's Telegram message in place of
+the sample image.
+
+    tap -> newest camera frame -> kiosk
+                               -> gate-capture (checks GATE_TOKEN) -> gate-captures bucket
+                               -> record_attendance(image_path) -> notify-guardian -> sendPhoto
+
+ffmpeg streams the camera continuously and the gate keeps only the newest
+frame (at most ~200 ms old), so taking a photo takes no time. Each photo is
+uploaded *before* its scan, because the Telegram message goes out on the
+INSERT. A photo never holds a scan back for long: offline, both wait;
+on 5xx the photo is retried 3 times; on 4xx (function not deployed, bad
+token) the scan goes at once, without it. A photo is deleted from the
+mini PC once it is delivered.
+
+Set `CAMERA_DEVICE` in `/etc/gate/gate.env` (`ls /dev/v4l/by-id/`, the one
+ending `-video-index0`) and deploy the function once:
+
+    supabase functions deploy gate-capture --no-verify-jwt
+
+On the Mac: `brew install ffmpeg`, then `CAMERA_DEVICE="CyberTrack H3"` in
+`.env.local` (names from `ffmpeg -f avfoundation -list_devices true -i ""`).
+Check it with `curl -s localhost:8080/control/status`: `cameraOnline`,
+`photosSent`, `photosSkipped`.
+
 ## Mini PC
 
 First time: `npm run build`, then follow the header of `deploy/setup-minipc.sh`.

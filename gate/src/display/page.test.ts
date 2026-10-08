@@ -69,3 +69,15 @@ test('a tap older than 1 minute (replayed after a browser restart) is not shown'
   assert.equal(text('status'), 'Please tap your card');
   assert.equal(text('name'), '');
 });
+
+test('the tap photo replaces the placeholder, and the next tap without one brings it back', () => {
+  const { send, el } = loadPage();
+  send({ type: 'scan', uid: '0002008108', at: ago(0), student: JUAN, photo: '/captures/e1.jpg' });
+  const shot = el('shot') as unknown as { src: string; hidden: boolean };
+  assert.equal(shot.src, '/captures/e1.jpg');
+  assert.equal(shot.hidden, false);
+  assert.equal(el('photo').className, 'shot');
+  send({ type: 'scan', uid: '0000000001', at: ago(0), student: null, photo: null });
+  assert.equal(shot.hidden, true);
+  assert.equal(el('photo').className, '');
+});

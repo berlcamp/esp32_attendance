@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { handleControl, type ControlApi, type ControlResult } from '../control.ts';
+import type { CaptureStore } from '../camera/captures.ts';
 import { PAGE_HTML } from './page.ts';
 import type { SseHub } from './sse.ts';
 
@@ -36,7 +37,12 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown> |
 
 // Bound to 127.0.0.1 by main.ts. The control routes are unauthenticated on
 // purpose -- they are reached over SSH -- so this must never listen publicly.
-export function createGateServer(deps: { hub: SseHub; version: string; control: ControlApi }): Server {
+export function createGateServer(deps: {
+  hub: SseHub;
+  version: string;
+  control: ControlApi;
+  captures?: Pick<CaptureStore, 'recent'> | null;
+}): Server {
   const page = PAGE_HTML.replaceAll('{{VERSION}}', deps.version);
   const assets = loadAssets();
   return createServer((req, res) => {
@@ -52,6 +58,17 @@ export function createGateServer(deps: { hub: SseHub; version: string; control: 
         res.writeHead(200, { 'Content-Type': asset.type, 'Cache-Control': 'no-cache' });
         res.end(asset.body);
         return;
+      }
+      // The photo of a recent tap, for the kiosk. Memory only: never a
+      // directory listing, never an older photo off the disk.
+      const capture = /^\/captures\/([0-9a-f-]{36})\.jpg$/.exec(url.pathname);
+      if (req.method === 'GET' && capture) {
+        const jpeg = deps.captures?.recent(capture[1]) ?? null;
+        if (jpeg) {
+          res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=60' });
+          res.end(jpeg);
+          return;
+        }
       }
       if (req.method === 'GET' && url.pathname === '/events') {
         deps.hub.attach(res);
