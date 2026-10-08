@@ -42,7 +42,7 @@ export const PAGE_HTML = String.raw`<!doctype html>
   #card.known { border-left-color: var(--ok); }
   #card.unknown { border-left-color: var(--bad); }
   #photo {
-    position: relative; flex: none; height: 34vh; aspect-ratio: 3 / 4; border-radius: 2vh; overflow: hidden;
+    position: relative; flex: none; height: 34vh; aspect-ratio: 4 / 3; border-radius: 2vh; overflow: hidden;
     background: linear-gradient(160deg, #3a4052, #1c2030); border: .5vh solid rgba(255,255,255,.15);
     display: flex; align-items: center; justify-content: center;
   }
