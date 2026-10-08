@@ -208,9 +208,12 @@ assumes it is theirs, and an unlabelled placeholder is worse than no photo.
 Unset it (`SAMPLE_PHOTO=`) before real parents are on the bot, and delete the
 constant the day a real capture lands.
 
-**Photographs of minors are not kept forever.** Attendance rows are; captures
-are not. `notify_config.capture_retention_days` (default 30) drives
-`expired_captures()`. Collect written consent at enrolment — `/stop` in the bot
+**Photographs of minors are not kept.** Attendance rows are; captures are
+not. Once every guardian's message for a scan is final, `notify-guardian`
+deletes its photo from the bucket and clears `image_path`. A photo it could
+not delete then (a send still awaiting retry, a crash) is swept on a later
+call once older than `gate_notify_config.capture_retention_days` (set to 1),
+via `expired_captures()`. Collect written consent at enrolment — `/stop` in the bot
 sets `student_guardians.notify = false`, so the opt-out you promise on paper
 does something real.
 

@@ -56,7 +56,8 @@ uploaded *before* its scan, because the Telegram message goes out on the
 INSERT. A photo never holds a scan back for long: offline, both wait;
 on 5xx the photo is retried 3 times; on 4xx (function not deployed, bad
 token) the scan goes at once, without it. A photo is deleted from the
-mini PC once it is delivered.
+mini PC once it is uploaded, and from Supabase once the parents' Telegram
+messages are sent.
 
 Set `CAMERA_DEVICE` in `/etc/gate/gate.env` (`ls /dev/v4l/by-id/`, the one
 ending `-video-index0`) and deploy the function once:

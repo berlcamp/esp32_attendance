@@ -3,8 +3,8 @@
 //
 // Takes the JPEG the gate camera shot at a tap and puts it in the private
 // capture bucket, returning the object path the gate then sends to
-// record_attendance() as image_path. notify-guardian signs that path and
-// attaches the photo to the parent's Telegram message.
+// record_attendance() as image_path. notify-guardian sends the photo with the
+// parent's Telegram message, then deletes it.
 //
 // Why a function and not a storage policy: the gate holds the anon key, which
 // is the shared project's PUBLIC key. A write policy for anon on gate-captures

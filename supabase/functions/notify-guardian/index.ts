@@ -111,6 +111,56 @@ async function loadPhoto(pathOrUrl: string): Promise<Photo | null> {
  */
 type PhotoCache = Map<string, Photo | null>;
 
+// Matches retry_notifications()'s default: below it, a failed send may still
+// be retried and needs its photo.
+const MAX_ATTEMPTS = 5;
+
+/** True while some guardian's message for this scan may still be (re)sent. */
+async function photoStillNeeded(eventId: string): Promise<boolean> {
+  const { count, error } = await db
+    .from("gate_notifications")
+    .select("event_id", { count: "exact", head: true })
+    .eq("event_id", eventId)
+    .in("status", ["sending", "failed"])
+    .lt("attempts", MAX_ATTEMPTS);
+  if (error) {
+    console.warn("could not check pending notifications; keeping the photo", eventId, error.message);
+    return true;
+  }
+  return (count ?? 0) > 0;
+}
+
+/**
+ * Deletes a scan's photo, then forgets its path. In that order: if the second
+ * step fails, the row still names the photo, so the sweep below finds it and
+ * tries again (removing an object that is already gone is not an error).
+ */
+async function forgetPhoto(eventId: string, path: string): Promise<void> {
+  const { error } = await db.storage.from(BUCKET).remove([path]);
+  if (error) {
+    console.warn("could not delete photo", path, error.message);
+    return;
+  }
+  const { error: e } = await db.rpc("forget_capture", { p_event_id: eventId });
+  if (e) console.warn("forget_capture failed", eventId, e.message);
+}
+
+/**
+ * The safety net: photos left behind by a send that failed for good, a crash,
+ * or a scan nobody was told about, once older than the school's
+ * capture_retention_days. Runs on every call, so it needs no cron of its own.
+ */
+async function sweepExpiredPhotos(): Promise<void> {
+  const { data, error } = await db.rpc("expired_captures", { p_limit: 50 });
+  if (error) {
+    console.warn("expired_captures", error.message);
+    return;
+  }
+  for (const row of (data ?? []) as { event_id: string; image_path: string }[]) {
+    await forgetPhoto(row.event_id, row.image_path);
+  }
+}
+
 async function deliver(job: Job, photos: PhotoCache): Promise<"sent" | "failed"> {
   const sample = !job.image_path && SAMPLE_PHOTO !== "";
   const source = job.image_path ?? (sample ? SAMPLE_PHOTO : null);
@@ -161,6 +211,9 @@ Deno.serve(async (req) => {
   }
 
   let jobs: Job[] = [];
+  // Every photo this call touched, by event: candidates for deletion once
+  // their messages are done.
+  const captures = new Map<string, string>();
 
   if (body.mode === "retry") {
     const { data, error } = await db.rpc("retry_notifications", {
@@ -192,7 +245,13 @@ Deno.serve(async (req) => {
       ...r,
       event_id: eventId,
     })) as Job[];
+    // Even with nobody to tell (no linked guardian, a stale scan), the photo
+    // has served its purpose.
+    if (typeof record.image_path === "string" && record.image_path) {
+      captures.set(eventId, record.image_path);
+    }
   }
+  for (const job of jobs) if (job.image_path) captures.set(job.event_id, job.image_path);
 
   let sent = 0, failed = 0;
   const photos: PhotoCache = new Map();
@@ -202,5 +261,14 @@ Deno.serve(async (req) => {
     if (GAP_MS > 0) await sleep(GAP_MS);
   }
 
-  return Response.json({ claimed: jobs.length, sent, failed });
+  // After the sends, so deleting never delays a parent's message.
+  let deleted = 0;
+  for (const [eventId, path] of captures) {
+    if (await photoStillNeeded(eventId)) continue;
+    await forgetPhoto(eventId, path);
+    deleted++;
+  }
+  await sweepExpiredPhotos();
+
+  return Response.json({ claimed: jobs.length, sent, failed, photos_deleted: deleted });
 });
